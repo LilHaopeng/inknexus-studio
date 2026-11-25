@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
+import { execFile } from 'child_process'
 import mammoth from 'mammoth'
 import TurndownService from 'turndown'
 import iconv from 'iconv-lite'
@@ -8,6 +9,53 @@ import type { CreationMode, ImportFileRole, ImportedFileItem, ProjectSummary } f
 import { ProjectManager } from './project-manager'
 
 const turndown = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-' })
+
+export function extractPdfText(filePath: string): Promise<string> {
+  const pyScript = `
+import sys
+p = sys.argv[1]
+text_parts = []
+try:
+    import fitz
+    with fitz.open(p) as doc:
+        for page in doc:
+            t = page.get_text("text") or ""
+            if t.strip():
+                text_parts.append(t.strip())
+except Exception:
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(p)
+        for page in reader.pages:
+            t = page.extract_text() or ""
+            if t.strip():
+                text_parts.append(t.strip())
+    except Exception as e:
+        sys.stderr.write(f"PDF 解析失败: {e}")
+        sys.exit(2)
+sys.stdout.write("\\n\\n".join(text_parts))
+`.trim()
+
+  return new Promise((resolve, reject) => {
+    execFile(
+      'python',
+      ['-c', pyScript, filePath],
+      {
+        timeout: 25000,
+        windowsHide: true,
+        maxBuffer: 16 * 1024 * 1024,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+      },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error(stderr?.trim() || err.message || 'PDF 解析失败'))
+          return
+        }
+        resolve((stdout || '').trim())
+      }
+    )
+  })
+}
 
 export function guessFileRole(fileName: string, previewText: string): ImportFileRole {
   const name = fileName.toLowerCase()
@@ -46,7 +94,7 @@ export class ImporterService {
       if (!fs.existsSync(p) || depth > 4) return
       const stat = fs.statSync(p)
       if (stat.isFile()) {
-        if (/\.(docx|txt|md)$/i.test(p)) collectedFiles.push(p)
+        if (/\.(pdf|docx|txt|md)$/i.test(p)) collectedFiles.push(p)
       } else if (stat.isDirectory()) {
         for (const entry of fs.readdirSync(p, { withFileTypes: true })) {
           if (entry.name.startsWith('.') || entry.name === 'node_modules') continue
@@ -73,7 +121,9 @@ export class ImporterService {
 
     try {
       let markdownContent = ''
-      if (ext === '.docx') {
+      if (ext === '.pdf') {
+        markdownContent = (await extractPdfText(filePath)).trim()
+      } else if (ext === '.docx') {
         const res = await mammoth.convertToHtml({ path: filePath })
         markdownContent = turndown.turndown(res.value || '').trim()
       } else {

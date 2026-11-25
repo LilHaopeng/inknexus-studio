@@ -50,7 +50,7 @@ export const ImportWizardModal: React.FC<ImportWizardModalProps> = ({
   const [selectedId, setSelectedId] = useState<string>(initialFiles[0]?.id ?? '')
   const [projectTitle, setProjectTitle] = useState<string>(() => {
     const first = initialFiles[0]?.fileName ?? '导入作品'
-    return first.replace(/\.(docx|txt|md)$/i, '').replace(/[《》]/g, '').slice(0, 24) || '导入作品'
+    return first.replace(/\.(pdf|docx|txt|md)$/i, '').replace(/[《》]/g, '').slice(0, 24) || '导入作品'
   })
   const [mode, setMode] = useState<CreationMode>('long-novel')
   const [intent, setIntent] = useState<CreationIntent>(() => {

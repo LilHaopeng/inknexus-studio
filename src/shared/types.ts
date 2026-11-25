@@ -65,11 +65,14 @@ export interface AppConfig {
   closeBehavior: CloseBehavior
 }
 
+export type ProjectCategory = 'long-novel' | 'short-webnovel' | 'drama-script' | 'unclassified'
+
 export interface ProjectSummary {
   id: string
   title: string
   rootPath: string
   mode: CreationMode
+  category: ProjectCategory
   tags: string[]
   chapterCount: number
   wordCount: number
@@ -172,6 +175,7 @@ export interface PreComposedPrompt {
   attachedSkillIds: SkillId[]
   summaryLabel: string
   taskTitle: string
+  autoPlanOnEnter?: boolean
 }
 
 export interface AgentBackendInfo {
@@ -228,10 +232,42 @@ export type StreamChunkEvent =
   | { requestId: string; type: 'done'; fullText: string; thinkingText: string }
   | { requestId: string; type: 'error'; message: string }
 
+export type AgentRoleId = 'coordinator' | 'writer' | 'reviewer1' | 'reviewer2'
+
+export interface AgentCommsMessage {
+  id: string
+  projectRoot: string
+  fromRole: AgentRoleId | 'user'
+  toRole: AgentRoleId | 'all' | 'user'
+  content: string
+  modelLabel?: string
+  timestamp: number
+}
+
+export interface ActiveWorkEntry {
+  projectId: string
+  projectRoot: string
+  title: string
+  stage: 'planning' | 'writing' | 'reviewing' | 'revising' | 'completing' | 'idle'
+  statusLabel: string
+  activeRole: AgentRoleId
+  updatedAt: number
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
+  kind?: 'text' | 'plan-proposal' | 'review-mode-ask' | 'question'
+  actionExecuted?: boolean
+  planPayload?: {
+    taskTitle: string
+    executePrompt: string
+  }
+  reviewAskPayload?: {
+    pendingPrompt: string
+    targetRelPath?: string
+  }
   thinking?: string
   toolLogs?: Array<{ toolName: string; detail: string }>
   proposal?: DiffProposal
@@ -333,6 +369,7 @@ export interface ProjectStorageBreakdown {
 export interface AppDataStorageReport {
   rootDir: string
   totalBytes: number
+  tempCacheBytes: number
   swarmBytes: number
   projects: ProjectStorageBreakdown[]
 }

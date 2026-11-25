@@ -1,773 +1,1040 @@
 import React, { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { toast } from 'sonner'
+import type {
+  AgentBackendInfo,
+  ApiProviderConfig,
+  AppDataStorageReport,
+  AppUpdateInfo,
+  CloseBehavior,
+  ProjectSummary,
+  SkillId,
+  SkillRegistryItem,
+  ThemeMode
+} from '@shared/types'
+import { useStudioStore } from '../store/useStudioStore'
 import {
-  ArrowUpCircle,
+  AlertTriangle,
+  BookOpenCheck,
   CheckCircle2,
   Cpu,
   Download,
   ExternalLink,
   FolderOpen,
+  Github,
   HardDrive,
   KeyRound,
-  Layers,
-  Loader2,
   Palette,
   RefreshCw,
   Scale,
-  Shield,
+  Sparkles,
   Trash2,
-  XCircle
+  Upload,
+  X
 } from 'lucide-react'
-import { toast } from 'sonner'
-import type { ApiProviderConfig, AppUpdateInfo, CloseBehavior, SkillId, StorageScope } from '@shared/types'
-import { useStudioStore } from '../store/useStudioStore'
 
-export type SettingsTab =
-  | 'agents'
-  | 'apis'
-  | 'skills'
-  | 'storage'
-  | 'appearance'
-  | 'workspace'
-  | 'updater'
-  | 'licenses'
+export type SettingsTab = 'appearance' | 'agents' | 'apis' | 'skills' | 'storage' | 'updater' | 'licenses'
 
 function formatBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return '0 B'
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 }
 
-export const SettingsPage: React.FC<{ initialTab?: SettingsTab }> = ({ initialTab = 'agents' }) => {
+function renderInlineClean(text: string): React.ReactNode {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g)
+  return parts.map((part, idx) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return (
+        <strong key={idx} className="font-semibold text-text-primary">
+          {part.slice(2, -2)}
+        </strong>
+      )
+    }
+    if (part.startsWith('`') && part.endsWith('`')) {
+      return (
+        <span
+          key={idx}
+          className="mx-0.5 rounded bg-accent-soft/60 px-1.5 py-0.5 font-mono text-[11px] text-accent"
+        >
+          {part.slice(1, -1)}
+        </span>
+      )
+    }
+    return <React.Fragment key={idx}>{part}</React.Fragment>
+  })
+}
+
+const CleanLicenseDocument: React.FC<{ raw: string }> = ({ raw }) => {
+  const lines = raw.split(/\r?\n/)
+  const elements: React.ReactNode[] = []
+  let i = 0
+
+  while (i < lines.length) {
+    const trimmed = lines[i].trim()
+    if (!trimmed) {
+      i += 1
+      continue
+    }
+
+    if (trimmed.startsWith('```')) {
+      i += 1
+      const blockLines: string[] = []
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
+        blockLines.push(lines[i])
+        i += 1
+      }
+      i += 1
+      elements.push(
+        <div
+          key={`code-${i}`}
+          className="rounded-xl border border-border bg-surface p-4 text-xs leading-relaxed text-text-secondary whitespace-pre-wrap"
+        >
+          {blockLines.join('\n')}
+        </div>
+      )
+      continue
+    }
+
+    if (trimmed.startsWith('|')) {
+      const tableLines: string[] = []
+      while (i < lines.length && lines[i].trim().startsWith('|')) {
+        tableLines.push(lines[i].trim())
+        i += 1
+      }
+      const parsedRows = tableLines
+        .filter((row) => !/^\|[\s\-:|]+\|$/.test(row))
+        .map((row) =>
+          row
+            .split('|')
+            .slice(1, -1)
+            .map((cell) => cell.trim())
+        )
+      if (parsedRows.length > 0) {
+        const [header, ...body] = parsedRows
+        elements.push(
+          <div key={`tbl-${i}`} className="overflow-x-auto rounded-xl border border-border bg-surface">
+            <table className="w-full text-left text-xs">
+              <thead className="border-b border-border bg-surface-raised/80 text-text-primary">
+                <tr>
+                  {header.map((h, colIdx) => (
+                    <th key={colIdx} className="px-3.5 py-2.5 font-semibold">
+                      {renderInlineClean(h)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/60">
+                {body.map((row, rowIdx) => (
+                  <tr key={rowIdx} className="hover:bg-surface-raised/40">
+                    {row.map((cell, colIdx) => (
+                      <td key={colIdx} className="px-3.5 py-2 text-text-secondary">
+                        {renderInlineClean(cell)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      }
+      continue
+    }
+
+    if (trimmed.startsWith('# ')) {
+      elements.push(
+        <h2 key={`h1-${i}`} className="text-base font-bold text-text-primary">
+          {renderInlineClean(trimmed.slice(2))}
+        </h2>
+      )
+      i += 1
+      continue
+    }
+
+    if (trimmed.startsWith('## ')) {
+      elements.push(
+        <h3 key={`h2-${i}`} className="border-b border-border/70 pb-1.5 pt-2 text-sm font-semibold text-accent">
+          {renderInlineClean(trimmed.slice(3))}
+        </h3>
+      )
+      i += 1
+      continue
+    }
+
+    if (trimmed.startsWith('### ')) {
+      elements.push(
+        <h4 key={`h3-${i}`} className="pt-1 text-xs font-semibold text-text-primary">
+          {renderInlineClean(trimmed.slice(4))}
+        </h4>
+      )
+      i += 1
+      continue
+    }
+
+    if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+      const bullets: string[] = []
+      while (i < lines.length && (lines[i].trim().startsWith('- ') || lines[i].trim().startsWith('* '))) {
+        bullets.push(lines[i].trim().slice(2))
+        i += 1
+      }
+      elements.push(
+        <ul key={`ul-${i}`} className="space-y-1.5 pl-4 text-xs text-text-secondary">
+          {bullets.map((b, idx) => (
+            <li key={idx} className="flex items-start gap-2">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
+              <span className="leading-relaxed">{renderInlineClean(b)}</span>
+            </li>
+          ))}
+        </ul>
+      )
+      continue
+    }
+
+    if (trimmed === '---' || trimmed === '***') {
+      i += 1
+      continue
+    }
+
+    elements.push(
+      <p key={`p-${i}`} className="text-xs leading-relaxed text-text-secondary">
+        {renderInlineClean(trimmed)}
+      </p>
+    )
+    i += 1
+  }
+
+  return <div className="space-y-3">{elements}</div>
+}
+
+export const SettingsPage: React.FC<{ initialTab?: SettingsTab }> = ({ initialTab = 'appearance' }) => {
   const {
+    config,
+    setConfig,
     localAgents,
     setLocalAgents,
     apiConfigs,
     setApiConfigs,
-    config,
-    setConfig,
-    storageReport,
-    setStorageReport,
+    projects,
+    setProjects,
+    activeProject,
+    setActiveProject,
     skillRegistry,
     setSkillRegistry,
     appInfo
   } = useStudioStore()
 
   const [tab, setTab] = useState<SettingsTab>(initialTab)
-  const [testingId, setTestingId] = useState<string | null>(null)
-  const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, string>>({})
-  const [endpointDrafts, setEndpointDrafts] = useState<Record<string, string>>({})
-  const [modelDrafts, setModelDrafts] = useState<Record<string, string>>({})
-  const [licensesText, setLicensesText] = useState('')
-  const [selectedScopes, setSelectedScopes] = useState<Record<string, StorageScope[]>>({})
-  const [checkingSkillId, setCheckingSkillId] = useState<string | null>(null)
-  const [pullingSkillId, setPullingSkillId] = useState<string | null>(null)
+  const [testingAgent, setTestingAgent] = useState<string | null>(null)
+  const [editingApi, setEditingApi] = useState<ApiProviderConfig | null>(null)
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [endpointInput, setEndpointInput] = useState('')
+  const [baseUrlInput, setBaseUrlInput] = useState('')
+  const [modelsInput, setModelsInput] = useState('')
+  const [testingApiId, setTestingApiId] = useState<string | null>(null)
+
+  const [storageReport, setStorageReport] = useState<AppDataStorageReport | null>(null)
+  const [deleteTargetProject, setDeleteTargetProject] = useState<ProjectSummary | null>(null)
+  const [deletingProject, setDeletingProject] = useState(false)
+
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null)
-  const [checkingAppUpdate, setCheckingAppUpdate] = useState(false)
-  const [downloadingUpdate, setDownloadingUpdate] = useState(false)
-  const [downloadProgress, setDownloadProgress] = useState<{ percent: number; label: string } | null>(null)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [updateProgress, setUpdateProgress] = useState<{ percent: number; label: string } | null>(null)
+  const [licenseText, setLicenseText] = useState('')
+  const [skillBusyId, setSkillBusyId] = useState<SkillId | null>(null)
 
   useEffect(() => {
     setTab(initialTab)
   }, [initialTab])
 
+  const loadStorage = async () => {
+    const [rep, scanned] = await Promise.all([window.inknexus.storage.report(), window.inknexus.projects.scan()])
+    setStorageReport(rep)
+    setProjects(scanned)
+  }
+
   useEffect(() => {
     if (tab === 'storage') {
-      void window.inknexus.storage.report().then(setStorageReport)
-    } else if (tab === 'licenses' && !licensesText) {
-      void window.inknexus.storage.getLicenses().then(setLicensesText)
-    } else if (tab === 'skills') {
+      void loadStorage()
+    } else if (tab === 'licenses' && !licenseText) {
+      void window.inknexus.storage.getLicenses().then(setLicenseText)
+    } else if (tab === 'skills' && skillRegistry.length === 0) {
       void window.inknexus.skills.registry().then(setSkillRegistry)
     }
-  }, [tab, licensesText, setStorageReport, setSkillRegistry])
+  }, [tab, licenseText, skillRegistry.length, setSkillRegistry])
 
   useEffect(() => {
-    return window.inknexus.updater.onProgress((p) => {
-      setDownloadProgress(p)
-    })
+    const unsub = window.inknexus.updater.onProgress((ev) => setUpdateProgress(ev))
+    return unsub
   }, [])
 
-  const handleSaveApi = async (preset: ApiProviderConfig) => {
-    const key = apiKeyDrafts[preset.presetId]
-    const endpointId = endpointDrafts[preset.presetId]
-    const modelsStr = modelDrafts[preset.presetId]
-    const parsedModels =
-      modelsStr !== undefined
-        ? modelsStr
-            .split(/[,，\n]/)
-            .map((s) => s.trim())
-            .filter(Boolean)
-        : undefined
-    const next = (await window.inknexus.agents.saveApi(preset.presetId, {
-      ...(key !== undefined ? { apiKey: key } : {}),
-      ...(endpointId !== undefined ? { endpointId } : {}),
-      ...(parsedModels?.length ? { models: parsedModels } : {}),
-      enabled: true
-    })) as ApiProviderConfig[]
-    setApiConfigs(next)
-    toast.success(`已保存 ${preset.name} 配置（Key 使用 Windows DPAPI 加密存入 AppData）`)
+  const handleSaveConfig = async (patch: Partial<NonNullable<typeof config>>) => {
+    const updated = await window.inknexus.config.save(patch)
+    setConfig(updated)
+    toast.success('设置已保存')
   }
 
-  const handleTestApi = async (preset: ApiProviderConfig) => {
-    setTestingId(preset.presetId)
-    try {
-      const modelOverride = (modelDrafts[preset.presetId] ?? preset.models.join(', '))
-        .split(/[,，\n]/)
-        .map((s) => s.trim())
-        .filter(Boolean)[0]
-      const res = await window.inknexus.agents.testApi(preset.presetId, modelOverride || preset.models[0])
-      if (res.ok) toast.success(res.message)
-      else toast.error(res.message)
-    } finally {
-      setTestingId(null)
-    }
+  const handleRediscoverAgents = async () => {
+    const list = await window.inknexus.agents.discover()
+    setLocalAgents(list)
+    toast.success(`已完成本地 Agent 探测（${list.filter((a) => a.status === 'available').length} 项就绪）`)
   }
 
-  const toggleScope = (projectId: string, scope: StorageScope) => {
-    setSelectedScopes((prev) => {
-      const cur = prev[projectId] ?? []
-      const exists = cur.includes(scope)
-      return {
-        ...prev,
-        [projectId]: exists ? cur.filter((s) => s !== scope) : [...cur, scope]
-      }
+  const handleTestLocal = async (agent: AgentBackendInfo) => {
+    setTestingAgent(agent.id)
+    const res = await window.inknexus.agents.testLocal(agent)
+    setTestingAgent(null)
+    if (res.ok) toast.success(`${agent.name}：${res.message}`)
+    else toast.error(`${agent.name}：${res.message}`)
+  }
+
+  const openEditApi = (item: ApiProviderConfig) => {
+    setEditingApi(item)
+    setApiKeyInput('')
+    setEndpointInput(item.endpointId ?? '')
+    setBaseUrlInput(item.baseUrl)
+    setModelsInput(item.models.join(', '))
+  }
+
+  const handleSaveApi = async () => {
+    if (!editingApi) return
+    const models = modelsInput
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const updated = await window.inknexus.agents.saveApi(editingApi.presetId, {
+      ...(apiKeyInput.trim() ? { apiKey: apiKeyInput.trim() } : {}),
+      endpointId: endpointInput.trim() || undefined,
+      baseUrl: baseUrlInput.trim(),
+      models,
+      enabled: Boolean(apiKeyInput.trim() || editingApi.hasApiKey)
     })
+    setApiConfigs(updated)
+    setEditingApi(null)
+    toast.success(`已保存 ${editingApi.name}`)
   }
 
-  const handleDeleteProjectCache = async (projectId: string, title: string) => {
-    const scopes = selectedScopes[projectId] ?? []
-    if (scopes.length === 0) {
-      toast.info('请先勾选要清理的缓存类型（批注 / 快照 / 聊天 / 审查记录）')
-      return
+  const handleTestApi = async (presetId: string) => {
+    setTestingApiId(presetId)
+    const res = await window.inknexus.agents.testApi(presetId)
+    setTestingApiId(null)
+    if (res.ok) toast.success(res.message)
+    else toast.error(res.message)
+  }
+
+  const handleExportApiJson = async () => {
+    const raw = await window.inknexus.agents.exportApiTemplate()
+    await navigator.clipboard.writeText(raw)
+    toast.success('脱敏 API 模板已复制到剪贴板')
+  }
+
+  const handleImportApiJson = async () => {
+    try {
+      const text = await navigator.clipboard.readText()
+      if (!text.trim()) {
+        toast.error('剪贴板为空，请先复制 JSON 模板')
+        return
+      }
+      const next = await window.inknexus.agents.importApiTemplate(text)
+      setApiConfigs(next)
+      toast.success('已从剪贴板导入 API 配置模板')
+    } catch (err) {
+      toast.error(`导入失败：${err instanceof Error ? err.message : String(err)}`)
     }
-    const next = await window.inknexus.storage.deleteProjectData(projectId, scopes)
-    setStorageReport(next)
-    setSelectedScopes((p) => ({ ...p, [projectId]: [] }))
-    toast.success(`已清理《${title}》的所选 AppData 缓存（原作品稿件完好无损）`)
   }
 
   const handleCheckSkill = async (skillId: SkillId) => {
-    setCheckingSkillId(skillId)
-    try {
-      const updated = await window.inknexus.skills.checkUpdate(skillId)
-      setSkillRegistry(skillRegistry.map((s) => (s.id === skillId ? updated : s)))
-      if (updated.hasUpdate) {
-        toast.info(`${updated.name} 检测到 GitHub 更新`)
-      } else {
-        toast.success(`${updated.name} 已是最新版本`)
-      }
-    } catch (err) {
-      toast.error(`检查失败：${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      setCheckingSkillId(null)
-    }
+    setSkillBusyId(skillId)
+    const updatedItem = await window.inknexus.skills.checkUpdate(skillId)
+    setSkillRegistry(skillRegistry.map((item) => (item.id === skillId ? updatedItem : item)))
+    setSkillBusyId(null)
+    toast.info(
+      updatedItem.hasUpdate
+        ? `${updatedItem.name}：发现远端新版 ${updatedItem.remoteVersion || ''}`
+        : `${updatedItem.name}：当前已是最新版本`
+    )
   }
 
   const handlePullSkill = async (skillId: SkillId) => {
-    setPullingSkillId(skillId)
-    try {
-      const updated = await window.inknexus.skills.pullUpdate(skillId)
-      setSkillRegistry(skillRegistry.map((s) => (s.id === skillId ? updated : s)))
-      toast.success(`已从 @LilHaopeng GitHub 拉取并更新 ${updated.name} 至 AppData/skills`)
-    } catch (err) {
-      toast.error(`拉取更新失败：${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      setPullingSkillId(null)
-    }
+    setSkillBusyId(skillId)
+    const updatedItem = await window.inknexus.skills.pullUpdate(skillId)
+    setSkillRegistry(skillRegistry.map((item) => (item.id === skillId ? updatedItem : item)))
+    setSkillBusyId(null)
+    toast.success(`${updatedItem.name}：已同步最新规范（${updatedItem.localVersion}）`)
   }
 
-  const handleCheckAllSkills = async () => {
-    for (const sk of skillRegistry) {
-      await handleCheckSkill(sk.id)
+  const handleClearTempCachesOnly = async () => {
+    const rep = await window.inknexus.storage.clearTempCaches()
+    setStorageReport(rep)
+    toast.success('已清理临时缓存，正文、聊天记录与批注完整保留')
+  }
+
+  const handleConfirmDeleteProject = async () => {
+    if (!deleteTargetProject) return
+    setDeletingProject(true)
+    try {
+      const updatedProjects = await window.inknexus.projects.deleteFolder(deleteTargetProject.rootPath)
+      setProjects(updatedProjects)
+      if (activeProject?.rootPath.toLowerCase() === deleteTargetProject.rootPath.toLowerCase()) {
+        setActiveProject(null)
+      }
+      const rep = await window.inknexus.storage.report()
+      setStorageReport(rep)
+      toast.success(`已永久删除《${deleteTargetProject.title}》`)
+      setDeleteTargetProject(null)
+    } catch (err) {
+      toast.error(`删除失败：${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setDeletingProject(false)
     }
   }
 
   const handleCheckAppUpdate = async () => {
-    setCheckingAppUpdate(true)
-    try {
-      const info = await window.inknexus.updater.check()
-      setUpdateInfo(info)
-      if (info.hasUpdate) {
-        toast.info(`发现新版本 v${info.latestVersion}`)
-      } else {
-        toast.success(`当前已安装最新版本 v${info.currentVersion}`)
-      }
-    } catch (err) {
-      toast.error(`检查软件更新失败：${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      setCheckingAppUpdate(false)
-    }
+    setCheckingUpdate(true)
+    const info = await window.inknexus.updater.check()
+    setUpdateInfo(info)
+    setCheckingUpdate(false)
   }
 
-  const handleDownloadAndInstallAppUpdate = async () => {
-    if (!updateInfo?.downloadUrl || !updateInfo.assetName) {
-      toast.error('未找到可直接安装的 Windows .exe 安装包资产')
-      return
-    }
-    setDownloadingUpdate(true)
-    try {
-      await window.inknexus.updater.downloadAndInstall(updateInfo.downloadUrl, updateInfo.assetName)
-      toast.success('安装包已就绪，软件即将关闭并自动安装重启...')
-    } catch (err) {
-      toast.error(`自动更新失败：${err instanceof Error ? err.message : String(err)}`)
-      setDownloadingUpdate(false)
-    }
-  }
+  const navTabs: { id: SettingsTab; label: string; icon: React.FC<{ className?: string }> }[] = [
+    { id: 'appearance', label: '外观与通用', icon: Palette },
+    { id: 'agents', label: '本地 Agent CLI', icon: Cpu },
+    { id: 'apis', label: 'API 供应商', icon: KeyRound },
+    { id: 'skills', label: '内置 Skill 规范库', icon: BookOpenCheck },
+    { id: 'storage', label: '数据与作品管理', icon: HardDrive },
+    { id: 'updater', label: '检查更新', icon: RefreshCw },
+    { id: 'licenses', label: '开源许可声明', icon: Scale }
+  ]
 
   return (
-    <div className="relative z-10 h-full overflow-y-auto px-8 py-6">
-      <div className="mx-auto max-w-6xl">
-        <h1 className="mb-4 text-2xl font-bold text-text-primary">设置与工作台管理</h1>
+    <div className="relative z-10 flex h-full overflow-hidden">
+      <aside className="w-56 shrink-0 border-r border-border bg-surface/65 p-4">
+        <h2 className="mb-3 px-2 text-sm font-bold text-text-primary">设置中心</h2>
+        <div className="space-y-1">
+          {navTabs.map((item) => {
+            const Icon = item.icon
+            const active = tab === item.id
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setTab(item.id)}
+                className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-medium transition ${
+                  active ? 'bg-accent-soft text-accent' : 'text-text-secondary hover:bg-surface-raised hover:text-text-primary'
+                }`}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                <span>{item.label}</span>
+              </button>
+            )
+          })}
+        </div>
+      </aside>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          {/* Sub Navigation */}
-          <div className="space-y-1 lg:col-span-3">
-            {[
-              { id: 'agents' as const, label: '本地 Agent 体检', icon: Cpu },
-              { id: 'apis' as const, label: '预置 API 供应商', icon: KeyRound },
-              { id: 'skills' as const, label: '内置 Skill 规范库', icon: Layers },
-              { id: 'storage' as const, label: 'AppData 存储与清理', icon: HardDrive },
-              { id: 'appearance' as const, label: '外观与阅读排版', icon: Palette },
-              { id: 'workspace' as const, label: '工作区、关闭行为与权限', icon: Shield },
-              { id: 'updater' as const, label: '检查软件更新', icon: ArrowUpCircle },
-              { id: 'licenses' as const, label: '开源许可声明', icon: Scale }
-            ].map((item) => {
-              const Icon = item.icon
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setTab(item.id)}
-                  className={`flex w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-left text-xs font-medium transition ${
-                    tab === item.id
-                      ? 'bg-accent-soft font-semibold text-accent'
-                      : 'text-text-secondary hover:bg-surface-raised hover:text-text-primary'
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                  <span>{item.label}</span>
-                </button>
-              )
-            })}
-          </div>
+      <div className="min-w-0 flex-1 overflow-y-auto p-8">
+        <div className="mx-auto max-w-4xl space-y-6">
+          {tab === 'appearance' && (
+            <div className="space-y-5">
+              <div>
+                <h1 className="text-xl font-bold text-text-primary">外观、工作区与关闭行为</h1>
+              </div>
 
-          {/* Content */}
-          <div className="glass-panel p-6 lg:col-span-9">
-            {tab === 'agents' && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
+              <div className="glass-card space-y-4 p-5">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
-                    <h2 className="text-base font-semibold text-text-primary">本地 CLI / ACP Agent 桥接检测</h2>
-                    <p className="text-xs text-text-secondary">
-                      自动绕过 Windows PowerShell 脚本限制并清洗不受支持的代理环境变量
-                    </p>
+                    <label className="text-xs font-medium text-text-secondary">主题方案</label>
+                    <select
+                      value={config?.theme ?? 'aurora-light'}
+                      onChange={(e) => void handleSaveConfig({ theme: e.target.value as ThemeMode })}
+                      className="mt-1.5 h-9 w-full rounded-xl border border-border bg-surface px-3 text-xs text-text-primary outline-none focus:border-accent"
+                    >
+                      <option value="aurora-light">极光浅紫（Aurora Light）</option>
+                      <option value="aurora-dark">星夜深色（Aurora Dark）</option>
+                      <option value="system">跟随系统主题</option>
+                    </select>
                   </div>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const list = await window.inknexus.agents.discover()
-                      setLocalAgents(list)
-                      toast.success('已刷新本地 Agent 探测状态')
-                    }}
-                    className="inline-flex items-center gap-1 rounded-xl border border-border bg-surface-raised px-3 py-1.5 text-xs font-medium hover:border-accent"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" />
-                    重新扫描
-                  </button>
+
+                  <div>
+                    <label className="text-xs font-medium text-text-secondary">关闭窗口行为</label>
+                    <select
+                      value={config?.closeBehavior ?? 'ask'}
+                      onChange={(e) => void handleSaveConfig({ closeBehavior: e.target.value as CloseBehavior })}
+                      className="mt-1.5 h-9 w-full rounded-xl border border-border bg-surface px-3 text-xs text-text-primary outline-none focus:border-accent"
+                    >
+                      <option value="ask">每次关闭时询问</option>
+                      <option value="minimize-to-tray">最小化到系统托盘后台运行</option>
+                      <option value="exit">直接退出应用</option>
+                    </select>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
-                  {localAgents.map((ag) => (
-                    <div key={ag.id} className="glass-card flex flex-wrap items-center justify-between gap-2 p-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-text-primary">{ag.name}</span>
-                          {ag.status === 'available' ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-success-soft px-2 py-0.5 text-[11px] font-medium text-success">
-                              <CheckCircle2 className="h-3 w-3" /> 已检测到
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-[11px] text-text-muted">
-                              <XCircle className="h-3 w-3" /> 未安装
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-1 text-xs text-text-secondary">{ag.description}</p>
-                        {ag.executablePath && (
-                          <div className="mt-1 truncate font-mono text-[11px] text-text-muted">{ag.executablePath}</div>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        disabled={ag.status !== 'available' || testingId === ag.id}
-                        onClick={async () => {
-                          setTestingId(ag.id)
-                          try {
-                            const res = await window.inknexus.agents.testLocal(ag)
-                            if (res.ok) toast.success(res.message)
-                            else toast.error(res.message)
-                          } finally {
-                            setTestingId(null)
-                          }
-                        }}
-                        className="rounded-xl border border-border bg-surface px-3 py-1.5 text-xs font-medium text-text-primary hover:border-accent disabled:opacity-40"
-                      >
-                        {testingId === ag.id ? '测试中...' : '测试连通'}
-                      </button>
-                    </div>
-                  ))}
+                <div>
+                  <label className="text-xs font-medium text-text-secondary">小说作品总目录（workspaceRoot）</label>
+                  <div className="mt-1.5 flex gap-2">
+                    <input
+                      type="text"
+                      value={config?.workspaceRoot ?? ''}
+                      onChange={(e) => {
+                        if (config) setConfig({ ...config, workspaceRoot: e.target.value })
+                      }}
+                      className="h-9 flex-1 rounded-xl border border-border bg-surface px-3 font-mono text-xs text-text-primary outline-none focus:border-accent"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void handleSaveConfig({ workspaceRoot: config?.workspaceRoot ?? '' })}
+                      className="h-9 rounded-xl bg-accent px-4 text-xs font-medium text-on-accent hover:bg-accent-hover"
+                    >
+                      应用目录
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="text-xs font-medium text-text-secondary">视觉动效模式</label>
+                    <select
+                      value={config?.effectsMode ?? 'full'}
+                      onChange={(e) =>
+                        void handleSaveConfig({ effectsMode: e.target.value as 'full' | 'reduced' })
+                      }
+                      className="mt-1.5 h-9 w-full rounded-xl border border-border bg-surface px-3 text-xs text-text-primary outline-none focus:border-accent"
+                    >
+                      <option value="full">完整极光毛玻璃特效</option>
+                      <option value="reduced">精简高性能模式</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-text-secondary">主编辑器纸张风格</label>
+                    <select
+                      value={config?.editorReadTheme ?? 'default'}
+                      onChange={(e) =>
+                        void handleSaveConfig({ editorReadTheme: e.target.value as 'default' | 'manuscript' })
+                      }
+                      className="mt-1.5 h-9 w-full rounded-xl border border-border bg-surface px-3 text-xs text-text-primary outline-none focus:border-accent"
+                    >
+                      <option value="default">现代净白 / 星夜</option>
+                      <option value="manuscript">米黄稿纸护眼</option>
+                    </select>
+                  </div>
                 </div>
               </div>
-            )}
+            </div>
+          )}
 
-            {tab === 'apis' && (
-              <div className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h2 className="text-base font-semibold text-text-primary">预置 API 供应商中心（只需填写 API Key）</h2>
-                    <p className="text-xs text-text-secondary">
-                      已更新至 2026 最新旗舰模型列表（Gemini 4、GPT-6.2、Claude 5.5、Kimi K3.1、Qwen 4 Max 等），亦支持自由编辑模型 ID
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const json = await window.inknexus.agents.exportApiTemplate()
-                      await navigator.clipboard.writeText(json)
-                      toast.success('已复制脱敏团队预设模板（不含任何 API Key）到剪贴板')
-                    }}
-                    className="rounded-xl border border-border bg-surface-raised px-3 py-1.5 text-xs font-medium text-text-primary hover:border-accent"
-                  >
-                    导出脱敏团队预设
-                  </button>
-                </div>
+          {tab === 'agents' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h1 className="text-xl font-bold text-text-primary">本地 Agent CLI 探测</h1>
+                <button
+                  type="button"
+                  onClick={() => void handleRediscoverAgents()}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-xs font-medium text-on-accent hover:bg-accent-hover"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  重新探测本机 CLI
+                </button>
+              </div>
 
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  {apiConfigs.map((api) => (
-                    <div key={api.presetId} className="glass-card space-y-2.5 p-4 text-xs">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {localAgents.map((agent) => (
+                  <div key={agent.id} className="glass-card flex flex-col justify-between gap-3 p-4">
+                    <div>
                       <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold text-text-primary">{api.name}</span>
+                        <span className="text-sm font-semibold text-text-primary">{agent.name}</span>
                         <span
                           className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                            api.hasApiKey ? 'bg-success-soft text-success' : 'bg-surface text-text-muted'
+                            agent.status === 'available'
+                              ? 'bg-success-soft text-success'
+                              : 'border border-border bg-surface text-text-muted'
                           }`}
                         >
-                          {api.hasApiKey ? '已配置 Key' : '待填 Key'}
+                          {agent.status === 'available' ? '已就绪' : '未配置'}
                         </span>
                       </div>
-                      <div className="truncate font-mono text-[11px] text-text-muted">{api.baseUrl || '自定义 Base URL'}</div>
-
-                      <input
-                        type="password"
-                        value={apiKeyDrafts[api.presetId] ?? ''}
-                        onChange={(e) => setApiKeyDrafts((d) => ({ ...d, [api.presetId]: e.target.value }))}
-                        placeholder={api.hasApiKey ? '••••••••••••（留空保持原 Key）' : '在此粘贴 API Key...'}
-                        className="w-full rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-text-primary outline-none focus:border-accent"
-                      />
-
-                      <input
-                        type="text"
-                        value={modelDrafts[api.presetId] ?? api.models.join(', ')}
-                        onChange={(e) => setModelDrafts((d) => ({ ...d, [api.presetId]: e.target.value }))}
-                        placeholder="逗号分隔模型 ID"
-                        className="w-full rounded-lg border border-border bg-surface px-2.5 py-1.5 font-mono text-[11px] text-text-secondary outline-none focus:border-accent"
-                      />
-
-                      {api.presetId === 'api-doubao' && (
-                        <input
-                          type="text"
-                          value={endpointDrafts[api.presetId] ?? api.endpointId ?? ''}
-                          onChange={(e) => setEndpointDrafts((d) => ({ ...d, [api.presetId]: e.target.value }))}
-                          placeholder="可选：火山方舟推理接入点 Endpoint ID (ep-...)"
-                          className="w-full rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-text-primary outline-none focus:border-accent"
-                        />
-                      )}
-
-                      <div className="flex items-center justify-end gap-1.5 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => void handleTestApi(api)}
-                          disabled={testingId === api.presetId}
-                          className="rounded-lg border border-border px-2.5 py-1 text-[11px] hover:border-accent"
-                        >
-                          {testingId === api.presetId ? '测试中' : '测试'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleSaveApi(api)}
-                          className="rounded-lg bg-accent px-2.5 py-1 text-[11px] font-medium text-on-accent"
-                        >
-                          保存启用
-                        </button>
-                      </div>
+                      <div className="mt-1 font-mono text-[11px] text-text-muted">{agent.executablePath || agent.id}</div>
+                      {agent.version && <div className="mt-1 text-[11px] text-text-secondary">版本：{agent.version}</div>}
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {tab === 'skills' && (
-              <div className="space-y-4 text-xs">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h2 className="text-base font-semibold text-text-primary">
-                      内置创作 Skill 规范库（绑定 @LilHaopeng GitHub MIT 仓库）
-                    </h2>
-                    <p className="text-text-secondary">
-                      全部 6 个写作与市场雷达 Skill 均支持手动检查更新并增量热拉取至本地 AppData，无需重装软件。
-                    </p>
+                    <div className="flex items-center justify-between border-t border-border/60 pt-2.5 text-xs">
+                      <span className="text-text-muted">{agent.models.length} 个模型</span>
+                      <button
+                        type="button"
+                        disabled={agent.status !== 'available' || testingAgent === agent.id}
+                        onClick={() => void handleTestLocal(agent)}
+                        className="rounded-lg border border-border px-2.5 py-1 text-text-secondary hover:border-accent hover:text-accent disabled:opacity-45"
+                      >
+                        {testingAgent === agent.id ? '检测中...' : '连通测试'}
+                      </button>
+                    </div>
                   </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {tab === 'apis' && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h1 className="text-xl font-bold text-text-primary">API 供应商</h1>
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => void handleCheckAllSkills()}
-                    className="inline-flex items-center gap-1 rounded-xl border border-border bg-surface-raised px-3 py-1.5 font-medium hover:border-accent"
+                    onClick={() => void handleExportApiJson()}
+                    className="inline-flex items-center gap-1 rounded-xl border border-border bg-surface-raised px-3 py-1.5 text-xs text-text-secondary hover:border-accent"
                   >
-                    <RefreshCw className="h-3.5 w-3.5" />
-                    全部检查更新
+                    <Download className="h-3.5 w-3.5" />
+                    导出脱敏模板
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleImportApiJson()}
+                    className="inline-flex items-center gap-1 rounded-xl border border-border bg-surface-raised px-3 py-1.5 text-xs text-text-secondary hover:border-accent"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    导入 JSON 模板
                   </button>
                 </div>
+              </div>
 
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  {skillRegistry.map((sk) => (
-                    <div key={sk.id} className="glass-card flex flex-col justify-between space-y-2.5 p-4">
-                      <div>
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-sm font-semibold text-accent">{sk.name}</span>
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                              sk.hasUpdate
-                                ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
-                                : 'bg-surface text-text-muted'
-                            }`}
-                          >
-                            v{sk.localVersion}
-                            {sk.hasUpdate ? ` → 新提交可拉取` : ''}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => void window.inknexus.app.openExternal(sk.repoUrl)}
-                          className="mt-1 inline-flex items-center gap-1 font-mono text-[11px] text-text-secondary hover:text-accent hover:underline"
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {apiConfigs.map((item) => (
+                  <div key={item.presetId} className="glass-card flex flex-col justify-between gap-3 p-4">
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-semibold text-text-primary">{item.name}</span>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                            item.enabled && item.hasApiKey
+                              ? 'bg-success-soft text-success'
+                              : 'border border-border bg-surface text-text-muted'
+                          }`}
                         >
-                          {sk.repoOwner}/{sk.repoName}
-                          <ExternalLink className="h-3 w-3" />
-                        </button>
-                        <p className="mt-2 line-clamp-3 leading-relaxed text-text-secondary">{sk.summary}</p>
-                        {sk.scripts.length > 0 && (
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {sk.scripts.map((sc) => (
-                              <span
-                                key={sc}
-                                className="rounded bg-surface px-1.5 py-0.5 font-mono text-[10px] text-text-muted"
-                              >
-                                {sc}
-                              </span>
-                            ))}
-                          </div>
-                        )}
+                          {item.enabled && item.hasApiKey ? '已启用' : '未配置密钥'}
+                        </span>
                       </div>
-
-                      <div className="flex items-center justify-end gap-1.5 border-t border-border pt-2">
-                        <button
-                          type="button"
-                          disabled={checkingSkillId === sk.id}
-                          onClick={() => void handleCheckSkill(sk.id)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 text-[11px] text-text-secondary hover:border-accent"
-                        >
-                          {checkingSkillId === sk.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <RefreshCw className="h-3 w-3" />
-                          )}
-                          检查更新
-                        </button>
-                        <button
-                          type="button"
-                          disabled={pullingSkillId === sk.id}
-                          onClick={() => void handlePullSkill(sk.id)}
-                          className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1 text-[11px] font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50"
-                        >
-                          {pullingSkillId === sk.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <Download className="h-3 w-3" />
-                          )}
-                          拉取覆盖
-                        </button>
+                      <div className="mt-1 truncate font-mono text-[11px] text-text-muted">{item.baseUrl}</div>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {item.models.slice(0, 4).map((m) => (
+                          <span key={m} className="rounded bg-surface px-1.5 py-0.5 text-[10px] text-text-secondary">
+                            {m}
+                          </span>
+                        ))}
                       </div>
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
-            {tab === 'storage' && (
-              <div className="space-y-4 text-xs">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h2 className="text-base font-semibold text-text-primary">AppData 统一存储与自主清理</h2>
-                    <p className="text-text-secondary">
-                      软件所有批注、历史快照、会话与并发队列日志均集中存放在本地 AppData，<strong>绝不污染你的小说原文件夹</strong>。删除操作仅清理缓存，永不删除原稿。
-                    </p>
+                    <div className="flex items-center justify-end gap-2 border-t border-border/60 pt-2.5 text-xs">
+                      <button
+                        type="button"
+                        disabled={!item.hasApiKey || testingApiId === item.presetId}
+                        onClick={() => void handleTestApi(item.presetId)}
+                        className="rounded-lg border border-border px-2.5 py-1 text-text-secondary hover:border-accent disabled:opacity-45"
+                      >
+                        {testingApiId === item.presetId ? '测试中...' : '测试连通'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openEditApi(item)}
+                        className="rounded-lg bg-accent px-3 py-1 font-medium text-on-accent hover:bg-accent-hover"
+                      >
+                        配置密钥
+                      </button>
+                    </div>
                   </div>
+                ))}
+              </div>
+
+              {editingApi && (
+                <div className="glass-card space-y-3 border-accent/40 p-5">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-text-primary">配置 {editingApi.name}</h3>
+                    <button
+                      type="button"
+                      onClick={() => setEditingApi(null)}
+                      className="rounded p-1 text-text-muted hover:text-text-primary"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs text-text-secondary">API Key</label>
+                      <input
+                        type="password"
+                        value={apiKeyInput}
+                        onChange={(e) => setApiKeyInput(e.target.value)}
+                        placeholder={editingApi.hasApiKey ? '已配置密钥（留空保持不变）' : 'sk-...'}
+                        className="mt-1 h-9 w-full rounded-xl border border-border bg-surface px-3 font-mono text-xs outline-none focus:border-accent"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-text-secondary">接入点 Base URL</label>
+                      <input
+                        type="text"
+                        value={baseUrlInput}
+                        onChange={(e) => setBaseUrlInput(e.target.value)}
+                        className="mt-1 h-9 w-full rounded-xl border border-border bg-surface px-3 font-mono text-xs outline-none focus:border-accent"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-text-secondary">接入点 Endpoint ID（豆包/方舟可选）</label>
+                      <input
+                        type="text"
+                        value={endpointInput}
+                        onChange={(e) => setEndpointInput(e.target.value)}
+                        placeholder="ep-..."
+                        className="mt-1 h-9 w-full rounded-xl border border-border bg-surface px-3 font-mono text-xs outline-none focus:border-accent"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-text-secondary">模型列表（逗号分隔）</label>
+                      <input
+                        type="text"
+                        value={modelsInput}
+                        onChange={(e) => setModelsInput(e.target.value)}
+                        className="mt-1 h-9 w-full rounded-xl border border-border bg-surface px-3 font-mono text-xs outline-none focus:border-accent"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditingApi(null)}
+                      className="rounded-xl border border-border px-4 py-1.5 text-xs text-text-secondary"
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleSaveApi()}
+                      className="rounded-xl bg-accent px-4 py-1.5 text-xs font-medium text-on-accent hover:bg-accent-hover"
+                    >
+                      保存并启用
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === 'skills' && (
+            <div className="space-y-4">
+              <h1 className="text-xl font-bold text-text-primary">内置 Skill 规范库</h1>
+              <div className="space-y-3">
+                {skillRegistry.map((skill: SkillRegistryItem) => (
+                  <div key={skill.id} className="glass-card flex flex-wrap items-center justify-between gap-4 p-4">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-text-primary">{skill.name}</span>
+                        <span className="rounded bg-accent-soft px-2 py-0.5 text-[10px] text-accent">
+                          {skill.localVersion || 'MIT'}
+                        </span>
+                        {skill.hasUpdate && (
+                          <span className="rounded bg-warning-soft px-2 py-0.5 text-[10px] text-warning">
+                            有新版 {skill.remoteVersion}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-text-secondary">{skill.summary}</p>
+                      <button
+                        type="button"
+                        onClick={() => void window.inknexus.app.openExternal(skill.repoUrl)}
+                        className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline"
+                      >
+                        <Github className="h-3 w-3" />
+                        <span>{skill.repoUrl}</span>
+                        <ExternalLink className="h-2.5 w-2.5" />
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={skillBusyId === skill.id}
+                        onClick={() => void handleCheckSkill(skill.id)}
+                        className="rounded-xl border border-border px-3 py-1.5 text-xs text-text-secondary hover:border-accent"
+                      >
+                        检查更新
+                      </button>
+                      <button
+                        type="button"
+                        disabled={skillBusyId === skill.id}
+                        onClick={() => void handlePullSkill(skill.id)}
+                        className="rounded-xl bg-accent px-3 py-1.5 text-xs font-medium text-on-accent hover:bg-accent-hover"
+                      >
+                        同步规范
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {tab === 'storage' && (
+            <div className="space-y-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h1 className="text-xl font-bold text-text-primary">AppData 缓存与作品管理</h1>
+                  <p className="mt-1 text-xs text-text-secondary">仅清理缓存，不影响正文</p>
+                </div>
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => void window.inknexus.storage.openAppData()}
-                    className="inline-flex items-center gap-1 rounded-xl border border-border bg-surface-raised px-3 py-1.5 font-medium hover:border-accent"
+                    className="inline-flex items-center gap-1 rounded-xl border border-border bg-surface-raised px-3 py-1.5 text-xs text-text-secondary hover:border-accent"
                   >
                     <FolderOpen className="h-3.5 w-3.5" />
-                    打开 AppData 目录
+                    打开 AppData
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleClearTempCachesOnly()}
+                    className="inline-flex items-center gap-1 rounded-xl bg-accent px-3.5 py-1.5 text-xs font-medium text-on-accent hover:bg-accent-hover"
+                  >
+                    <Sparkles className="h-3.5 w-3.5" />
+                    清理临时缓存
                   </button>
                 </div>
+              </div>
 
-                {storageReport && (
-                  <>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                      <div className="glass-card p-3.5">
-                        <div className="text-text-muted">AppData 总占用</div>
-                        <div className="mt-1 text-lg font-bold text-accent">{formatBytes(storageReport.totalBytes)}</div>
-                      </div>
-                      <div className="glass-card p-3.5">
-                        <div className="text-text-muted">并发队列历史记录</div>
-                        <div className="mt-1 flex items-center justify-between">
-                          <span className="text-lg font-bold text-text-primary">{formatBytes(storageReport.swarmBytes)}</span>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              const next = await window.inknexus.storage.clearSwarm()
-                              setStorageReport(next)
-                              toast.success('已清理并发队列历史记录')
-                            }}
-                            className="rounded-lg border border-danger/40 px-2 py-1 text-[11px] text-danger hover:bg-danger-soft"
-                          >
-                            清空队列记录
-                          </button>
-                        </div>
-                      </div>
-                      <div className="glass-card p-3.5">
-                        <div className="text-text-muted">已索引作品缓存数</div>
-                        <div className="mt-1 text-lg font-bold text-text-primary">{storageReport.projects.length} 部</div>
-                      </div>
+              {storageReport && (
+                <div className="glass-card grid grid-cols-1 gap-4 p-4 sm:grid-cols-3">
+                  <div>
+                    <div className="text-[11px] text-text-muted">临时缓存占用（可安全清理）</div>
+                    <div className="mt-1 text-lg font-bold text-accent">{formatBytes(storageReport.tempCacheBytes)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-text-muted">AppData 总占用（含对话/批注/审查/快照）</div>
+                    <div className="mt-1 text-lg font-bold text-text-primary">
+                      {formatBytes(storageReport.totalBytes)}
                     </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-text-muted">已关联作品数据目录</div>
+                    <div className="mt-1 text-lg font-bold text-text-primary">{storageReport.projects.length} 个</div>
+                  </div>
+                </div>
+              )}
 
-                    <div className="space-y-2.5">
-                      {storageReport.projects.map((p) => {
-                        const checked = selectedScopes[p.projectId] ?? []
-                        return (
-                          <div key={p.projectId} className="glass-card flex flex-wrap items-center justify-between gap-3 p-3.5">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-semibold text-text-primary">{p.title}</span>
-                                <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] text-text-secondary">
-                                  总计 {formatBytes(p.totalBytes)}
-                                </span>
-                              </div>
-                              <div className="mt-1.5 flex flex-wrap gap-3 text-[11px] text-text-secondary">
-                                {[
-                                  { scope: 'annotations' as const, label: `批注 (${p.annotationCount}条 · ${formatBytes(p.annotationsBytes)})` },
-                                  { scope: 'snapshots' as const, label: `快照 (${p.snapshotCount}份 · ${formatBytes(p.snapshotsBytes)})` },
-                                  { scope: 'chat' as const, label: `对话 (${formatBytes(p.chatBytes)})` },
-                                  { scope: 'reviews' as const, label: `审查记录 (${formatBytes(p.reviewsBytes)})` }
-                                ].map((item) => (
-                                  <label key={item.scope} className="inline-flex cursor-pointer items-center gap-1">
-                                    <input
-                                      type="checkbox"
-                                      checked={checked.includes(item.scope)}
-                                      onChange={() => toggleScope(p.projectId, item.scope)}
-                                    />
-                                    <span>{item.label}</span>
-                                  </label>
-                                ))}
-                              </div>
-                            </div>
+              {/* 当前作品列表（支持人工确认删除整部作品目录） */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-text-primary">当前作品列表（{projects.length} 部）</h2>
+                </div>
 
+                {projects.length === 0 ? (
+                  <div className="glass-card p-6 text-center text-xs text-text-muted">当前工作区暂无作品文件夹</div>
+                ) : (
+                  <div className="space-y-2">
+                    {projects.map((p) => {
+                      const catLabel =
+                        p.category === 'unclassified'
+                          ? '未分类'
+                          : p.category === 'short-webnovel'
+                            ? '短篇网文'
+                            : p.category === 'drama-script'
+                              ? 'AI 剧本'
+                              : '长文小说'
+                      return (
+                        <div
+                          key={p.id}
+                          className="glass-card flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                        >
+                          <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => void handleDeleteProjectCache(p.projectId, p.title)}
-                                className="inline-flex items-center gap-1 rounded-lg border border-danger/40 px-2.5 py-1.5 text-[11px] font-medium text-danger hover:bg-danger-soft"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                                删除所选
-                              </button>
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  const next = await window.inknexus.storage.deleteProjectData(p.projectId, ['all'])
-                                  setStorageReport(next)
-                                  toast.success(`已清除《${p.title}》全部 AppData 缓存`)
-                                }}
-                                className="rounded-lg bg-danger-soft px-2.5 py-1.5 text-[11px] font-medium text-danger hover:bg-danger hover:text-white"
-                              >
-                                全清该书缓存
-                              </button>
+                              <span className="truncate text-sm font-semibold text-text-primary">{p.title}</span>
+                              <span className="rounded bg-accent-soft px-2 py-0.5 text-[10px] font-medium text-accent">
+                                {catLabel}
+                              </span>
+                              <span className="text-[11px] text-text-muted">
+                                {p.chapterCount} 篇 · {p.wordCount.toLocaleString()} 字
+                              </span>
                             </div>
+                            <div className="mt-0.5 truncate font-mono text-[11px] text-text-muted">{p.rootPath}</div>
                           </div>
-                        )
-                      })}
-                    </div>
-                  </>
+
+                          <div className="flex shrink-0 items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void window.inknexus.projects.openFolder(p.rootPath)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs text-text-secondary hover:border-accent"
+                            >
+                              <FolderOpen className="h-3.5 w-3.5" />
+                              打开目录
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeleteTargetProject(p)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-danger/45 bg-danger-soft/40 px-2.5 py-1.5 text-xs font-medium text-danger hover:bg-danger hover:text-white"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
                 )}
               </div>
-            )}
+            </div>
+          )}
 
-            {tab === 'appearance' && config && (
-              <div className="space-y-4 text-xs">
-                <h2 className="text-base font-semibold text-text-primary">主题、磨砂与排版偏好</h2>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="mb-1 block font-medium text-text-secondary">整体界面主题</label>
-                    <select
-                      value={config.theme}
-                      onChange={async (e) => setConfig(await window.inknexus.config.save({ theme: e.target.value as never }))}
-                      className="w-full rounded-xl border border-border bg-surface-raised px-3 py-2"
-                    >
-                      <option value="aurora-light">极光晨曦（Aurora Light）</option>
-                      <option value="aurora-dark">极光夜幕（Aurora Dark）</option>
-                      <option value="system">跟随 Windows 系统</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="mb-1 block font-medium text-text-secondary">视觉动效与玻璃材质</label>
-                    <select
-                      value={config.effectsMode}
-                      onChange={async (e) => setConfig(await window.inknexus.config.save({ effectsMode: e.target.value as never }))}
-                      className="w-full rounded-xl border border-border bg-surface-raised px-3 py-2"
-                    >
-                      <option value="full">完整 Aurora 玻璃拟态与微动效</option>
-                      <option value="reduced">减弱动效与降低透明度（高性能实色）</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {tab === 'workspace' && config && (
-              <div className="space-y-4 text-xs">
-                <h2 className="text-base font-semibold text-text-primary">工作区、窗口关闭与安全权限</h2>
-                <div>
-                  <label className="mb-1 block font-medium text-text-secondary">默认作品库根目录</label>
-                  <input
-                    type="text"
-                    value={config.workspaceRoot}
-                    onChange={async (e) => setConfig(await window.inknexus.config.save({ workspaceRoot: e.target.value }))}
-                    className="w-full rounded-xl border border-border bg-surface-raised px-3 py-2 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block font-medium text-text-secondary">点击右上角 X 关闭按钮时的行为</label>
-                  <select
-                    value={config.closeBehavior ?? 'ask'}
-                    onChange={async (e) =>
-                      setConfig(await window.inknexus.config.save({ closeBehavior: e.target.value as CloseBehavior }))
-                    }
-                    className="w-full rounded-xl border border-border bg-surface-raised px-3 py-2"
-                  >
-                    <option value="ask">每次询问（弹出「最小化后台运行 / 直接关闭」选择框）</option>
-                    <option value="minimize-to-tray">最小化到系统托盘后台运行</option>
-                    <option value="exit">直接退出 InkNexus Studio</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="mb-1 block font-medium text-text-secondary">Agent 文件写入策略</label>
-                  <select
-                    value={config.permissionMode}
-                    onChange={async (e) => setConfig(await window.inknexus.config.save({ permissionMode: e.target.value as never }))}
-                    className="w-full rounded-xl border border-border bg-surface-raised px-3 py-2"
-                  >
-                    <option value="diff-review">安全协作模式（推荐：先出红绿 Diff 预览，人工确认后写入）</option>
-                    <option value="auto-write">自动写入模式（AI 修改前自动存快照，直接落盘）</option>
-                  </select>
-                </div>
-              </div>
-            )}
-
-            {tab === 'updater' && (
-              <div className="space-y-4 text-xs">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h2 className="text-base font-semibold text-text-primary">检查软件更新（GitHub Releases 自动升级）</h2>
-                    <p className="text-text-secondary">
-                      当前版本：<strong className="text-accent">v{appInfo.version}</strong> · 作者：@{appInfo.author} · 开源仓库：
+          {tab === 'updater' && (
+            <div className="space-y-5">
+              <h1 className="text-xl font-bold text-text-primary">检查软件更新</h1>
+              <div className="glass-card space-y-4 p-5">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <div className="text-sm font-semibold text-text-primary">
+                      墨枢 InkNexus Studio v{appInfo.version}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+                      <span>开源作者：</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void window.inknexus.app.openExternal(appInfo.authorUrl || 'https://github.com/LilHaopeng')
+                        }
+                        className="inline-flex items-center gap-1 font-medium text-accent hover:underline"
+                      >
+                        <Github className="h-3.5 w-3.5" />
+                        <span>{appInfo.author}</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </button>
+                      <span className="text-text-muted">·</span>
                       <button
                         type="button"
                         onClick={() => void window.inknexus.app.openExternal(appInfo.repoUrl)}
-                        className="ml-1 text-accent hover:underline"
+                        className="inline-flex items-center gap-1 text-text-secondary hover:text-accent hover:underline"
                       >
-                        {appInfo.repoUrl}
+                        <span>项目开源仓库</span>
+                        <ExternalLink className="h-3 w-3" />
                       </button>
-                    </p>
+                    </div>
+                    <div className="pt-1 text-xs font-medium text-text-primary">
+                      小红书 / 抖音 / B站：昊鹏同学
+                    </div>
                   </div>
+
                   <button
                     type="button"
-                    disabled={checkingAppUpdate}
+                    disabled={checkingUpdate}
                     onClick={() => void handleCheckAppUpdate()}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-4 py-2 font-semibold text-on-accent hover:bg-accent-hover disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-4 py-2 text-xs font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50"
                   >
-                    {checkingAppUpdate ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                    {checkingAppUpdate ? '检查中...' : '检查更新'}
+                    <RefreshCw className={`h-3.5 w-3.5 ${checkingUpdate ? 'animate-spin' : ''}`} />
+                    {checkingUpdate ? '检查中...' : '检查 GitHub 更新'}
                   </button>
                 </div>
 
                 {updateInfo && (
-                  <div className="glass-card space-y-3 p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="text-sm font-semibold text-text-primary">
-                          最新版本：v{updateInfo.latestVersion}
-                        </div>
-                        <div className="text-[11px] text-text-muted">
-                          {updateInfo.hasUpdate ? '有可用更新包，支持一键拉取安装包并静默安装后自动重开' : '您当前已是最新版本'}
-                        </div>
-                      </div>
-                      {updateInfo.hasUpdate && updateInfo.downloadUrl && (
-                        <button
-                          type="button"
-                          disabled={downloadingUpdate}
-                          onClick={() => void handleDownloadAndInstallAppUpdate()}
-                          className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-[#7855DA] to-[#684BD2] px-4 py-2 font-semibold text-white shadow-md hover:opacity-95 disabled:opacity-50"
-                        >
-                          {downloadingUpdate ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                          {downloadingUpdate ? '下载安装中...' : '下载并自动安装'}
-                        </button>
-                      )}
+                  <div className="rounded-xl border border-border bg-surface p-4 text-xs space-y-2">
+                    <div className="flex items-center gap-2 font-semibold text-text-primary">
+                      <CheckCircle2 className="h-4 w-4 text-accent" />
+                      <span>
+                        当前版本 v{updateInfo.currentVersion} · 最新 Release v{updateInfo.latestVersion}
+                      </span>
                     </div>
-
-                    {downloadProgress && (
-                      <div className="space-y-1">
-                        <div className="flex justify-between text-[11px] text-text-secondary">
-                          <span>{downloadProgress.label}</span>
-                          <span>{downloadProgress.percent}%</span>
-                        </div>
-                        <div className="h-2 w-full overflow-hidden rounded-full bg-surface">
-                          <div
-                            className="h-full bg-accent transition-all"
-                            style={{ width: `${downloadProgress.percent}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {updateInfo.releaseNotes && (
-                      <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-xl border border-border bg-surface p-3 text-[11px] text-text-secondary">
-                        {updateInfo.releaseNotes}
-                      </pre>
+                    <p className="text-text-secondary">
+                      {updateInfo.hasUpdate ? updateInfo.releaseNotes || '检测到新版本可下载更新' : '当前已是最新版本'}
+                    </p>
+                    {updateInfo.hasUpdate && updateInfo.downloadUrl && updateInfo.assetName && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void window.inknexus.updater.downloadAndInstall(
+                            updateInfo.downloadUrl!,
+                            updateInfo.assetName!
+                          )
+                        }
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-4 py-1.5 text-xs font-medium text-on-accent"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        下载并安装 {updateInfo.assetName}
+                      </button>
                     )}
                   </div>
                 )}
-              </div>
-            )}
 
-            {tab === 'licenses' && (
-              <div className="space-y-3">
-                <h2 className="text-base font-semibold text-text-primary">开源许可声明（MIT / Apache-2.0 / BSD）</h2>
-                <pre className="max-h-[520px] overflow-y-auto whitespace-pre-wrap rounded-xl border border-border bg-surface-raised p-4 text-xs leading-relaxed text-text-secondary">
-                  {licensesText || '加载中...'}
-                </pre>
+                {updateProgress && (
+                  <div className="space-y-1 text-xs">
+                    <div className="flex justify-between text-text-secondary">
+                      <span>{updateProgress.label}</span>
+                      <span>{updateProgress.percent}%</span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-surface">
+                      <div
+                        className="h-full bg-accent transition-all"
+                        style={{ width: `${updateProgress.percent}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </div>
+          )}
+
+          {tab === 'licenses' && (
+            <div className="space-y-4">
+              <h1 className="text-xl font-bold text-text-primary">开源许可声明</h1>
+              <div className="glass-card p-6">
+                {licenseText ? (
+                  <CleanLicenseDocument raw={licenseText} />
+                ) : (
+                  <div className="text-xs text-text-muted">正在加载开源许可声明...</div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
+
+      {/* 删除作品二次确认弹窗 */}
+      {deleteTargetProject &&
+        createPortal(
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 backdrop-blur-xs">
+            <div className="glass-panel w-full max-w-md space-y-4 border border-danger/35 p-6 shadow-2xl">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-danger-soft text-danger">
+                  <AlertTriangle className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-text-primary">确认永久删除作品文件夹？</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-text-secondary">
+                    您正在准备删除《<strong className="text-text-primary">{deleteTargetProject.title}</strong>》。
+                    <span className="mt-1 block font-semibold text-danger">
+                      该操作将彻底删除磁盘上的作品目录及全部世界观、大纲与章节正文文件，删除后不可恢复！
+                    </span>
+                  </p>
+                  <div className="mt-2 truncate rounded-lg border border-border bg-surface px-2.5 py-1 font-mono text-[11px] text-text-muted">
+                    {deleteTargetProject.rootPath}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={deletingProject}
+                  onClick={() => setDeleteTargetProject(null)}
+                  className="h-9 rounded-xl border border-border px-4 text-xs font-medium text-text-secondary hover:text-text-primary"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  disabled={deletingProject}
+                  onClick={() => void handleConfirmDeleteProject()}
+                  className="h-9 rounded-xl bg-danger px-4 text-xs font-semibold text-white shadow-sm hover:opacity-90 disabled:opacity-50"
+                >
+                  {deletingProject ? '正在删除...' : '确认永久删除（不可恢复）'}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   )
 }

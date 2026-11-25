@@ -10,6 +10,7 @@ import type {
   CreationMode,
   ImportedFileItem,
   PermissionMode,
+  ProjectCategory,
   RadarReportSummary,
   RadarTrendAnalysis,
   ReviewHistoryEntry,
@@ -49,7 +50,12 @@ const api = {
   },
   app: {
     getInfo: () =>
-      ipcRenderer.invoke('app:getInfo') as Promise<{ version: string; author: string; repoUrl: string }>,
+      ipcRenderer.invoke('app:getInfo') as Promise<{
+        version: string
+        author: string
+        repoUrl: string
+        authorUrl: string
+      }>,
     openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url)
   },
   config: {
@@ -68,6 +74,9 @@ const api = {
     createFile: (projectRoot: string, relPath: string, initial?: string) =>
       ipcRenderer.invoke('projects:createFile', projectRoot, relPath, initial),
     openFolder: (targetPath: string) => ipcRenderer.invoke('projects:openFolder', targetPath),
+    classify: (projectRoot: string, targetCategory: Exclude<ProjectCategory, 'unclassified'>) =>
+      ipcRenderer.invoke('projects:classify', projectRoot, targetCategory),
+    deleteFolder: (projectRoot: string) => ipcRenderer.invoke('projects:deleteFolder', projectRoot),
     radarReports: (workspaceRoot?: string) =>
       ipcRenderer.invoke('projects:radarReports', workspaceRoot) as Promise<RadarReportSummary[]>,
     onExternalChange: (cb: (payload: { projectRoot: string; relPath: string }) => void) => {
@@ -252,6 +261,7 @@ const api = {
     deleteProjectData: (projectId: string, scopes: StorageScope[]) =>
       ipcRenderer.invoke('storage:deleteProjectData', projectId, scopes),
     clearSwarm: () => ipcRenderer.invoke('storage:clearSwarm'),
+    clearTempCaches: () => ipcRenderer.invoke('storage:clearTempCaches'),
     openAppData: () => ipcRenderer.invoke('storage:openAppData'),
     getLicenses: () => ipcRenderer.invoke('app:getLicenses') as Promise<string>
   }

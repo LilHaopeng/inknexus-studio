@@ -16,7 +16,6 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useStudioStore } from '../../store/useStudioStore'
-import { AgentSelectorBar } from '../ui/AgentSelectorBar'
 
 interface TitleBarProps {
   onOpenExport?: () => void
@@ -43,6 +42,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenExport, onOpenVersions
     config,
     setConfig,
     swarmJobs,
+    activeWorks,
     setPage,
     agentSelection,
     setAgentSelection,
@@ -69,9 +69,13 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenExport, onOpenVersions
     return () => document.removeEventListener('mousedown', onOutside)
   }, [connOpen])
 
-  const runningSwarm = swarmJobs.filter((j) =>
-    ['queued', 'writing', 'linting', 'self_review', 'review_round_1', 'revising_1', 'review_round_2', 'revising_2'].includes(j.stage)
-  ).length
+  const runningLive = Object.values(activeWorks).filter((w) => w.stage !== 'idle').length
+  const runningSwarm =
+    swarmJobs.filter((j) =>
+      ['queued', 'writing', 'linting', 'self_review', 'review_round_1', 'revising_1', 'review_round_2', 'revising_2'].includes(
+        j.stage
+      )
+    ).length + runningLive
 
   const isDark =
     config?.theme === 'aurora-dark' ||
@@ -145,42 +149,45 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenExport, onOpenVersions
 
               <div className="space-y-3 text-xs">
                 <div>
-                  <div className="mb-1.5 text-[11px] font-medium text-text-muted">本地已检测到 CLI（{availableLocals.length}）</div>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {localAgents.map((a) => {
-                      const active = agentSelection.backendId === a.id
-                      const avail = a.status === 'available'
-                      return (
-                        <button
-                          key={a.id}
-                          type="button"
-                          disabled={!avail}
-                          onClick={() => {
-                            setAgentSelection({
-                              backendId: a.id,
-                              model: a.models[0] || '',
-                              reasoning: agentSelection.reasoning
-                            })
-                            toast.success(`已切换至 ${a.name}`)
-                          }}
-                          className={`flex items-center justify-between rounded-xl border px-2.5 py-1.5 text-left transition ${
-                            active
-                              ? 'border-accent bg-accent-soft/70 text-accent font-medium'
-                              : avail
-                                ? 'border-border bg-surface hover:border-accent/40 text-text-primary'
-                                : 'border-border/50 bg-surface/40 text-text-muted opacity-55 cursor-not-allowed'
-                          }`}
-                        >
-                          <span className="truncate">{a.name}</span>
-                          {active ? (
-                            <Check className="h-3.5 w-3.5 shrink-0" />
-                          ) : (
-                            <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${avail ? 'bg-success' : 'bg-text-muted'}`} />
-                          )}
-                        </button>
-                      )
-                    })}
-                  </div>
+                  <div className="mb-1.5 text-[11px] font-medium text-text-muted">已检测到本地 CLI（{availableLocals.length}）</div>
+                  {availableLocals.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-border p-2.5 text-[11px] text-text-muted">
+                      未检测到可用的本地 CLI，请安装或在设置中配置 API 供应商。
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {availableLocals.map((a) => {
+                        const active = agentSelection.backendId === a.id
+                        return (
+                          <button
+                            key={a.id}
+                            type="button"
+                            onClick={() => {
+                              setAgentSelection({
+                                backendId: a.id,
+                                model: a.models[0] || '',
+                                reasoning: agentSelection.reasoning
+                              })
+                              toast.success(`已切换主控引擎至 ${a.name}`)
+                              setConnOpen(false)
+                            }}
+                            className={`flex items-center justify-between rounded-xl border px-2.5 py-1.5 text-left transition ${
+                              active
+                                ? 'border-accent bg-accent-soft/70 font-medium text-accent'
+                                : 'border-border bg-surface text-text-primary hover:border-accent/40'
+                            }`}
+                          >
+                            <span className="truncate">{a.name}</span>
+                            {active ? (
+                              <Check className="h-3.5 w-3.5 shrink-0" />
+                            ) : (
+                              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" />
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -189,7 +196,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenExport, onOpenVersions
                   </div>
                   {configuredApis.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-border p-2.5 text-[11px] text-text-muted">
-                      暂未填写 API Key，可点击下方按钮前往「预置 API 供应商」填写 Key 后即用。
+                      暂未填写 API Key，请前往设置填写 Key 后自动启用。
                     </div>
                   ) : (
                     <div className="grid grid-cols-2 gap-1.5">
@@ -205,12 +212,13 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenExport, onOpenVersions
                                 model: api.models[0] || '',
                                 reasoning: agentSelection.reasoning
                               })
-                              toast.success(`已切换至 ${api.name}`)
+                              toast.success(`已切换主控引擎至 ${api.name}`)
+                              setConnOpen(false)
                             }}
                             className={`flex items-center justify-between rounded-xl border px-2.5 py-1.5 text-left transition ${
                               active
-                                ? 'border-accent bg-accent-soft/70 text-accent font-medium'
-                                : 'border-border bg-surface hover:border-accent/40 text-text-primary'
+                                ? 'border-accent bg-accent-soft/70 font-medium text-accent'
+                                : 'border-border bg-surface text-text-primary hover:border-accent/40'
                             }`}
                           >
                             <span className="truncate">{api.name}</span>
@@ -220,11 +228,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenExport, onOpenVersions
                       })}
                     </div>
                   )}
-                </div>
-
-                <div>
-                  <div className="mb-1.5 text-[11px] font-medium text-text-muted">当前模型与思考深度</div>
-                  <AgentSelectorBar value={agentSelection} onChange={setAgentSelection} compact />
                 </div>
 
                 <div className="flex justify-end border-t border-border/60 pt-2">
@@ -237,7 +240,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenExport, onOpenVersions
                     className="inline-flex items-center gap-1 text-[11px] font-medium text-accent hover:underline"
                   >
                     <Settings className="h-3 w-3" />
-                    管理全部 CLI 与预置 API →
+                    管理本地 Agent 与 API 供应商 →
                   </button>
                 </div>
               </div>
@@ -271,11 +274,11 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenExport, onOpenVersions
         <button
           type="button"
           onClick={() => setPage('swarm')}
-          title="查看并发队列任务"
+          title="查看正在工作的小说与任务"
           className="relative inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface-raised px-2.5 text-xs text-text-secondary transition hover:border-accent/40 hover:text-text-primary"
         >
           <Bell className="h-3.5 w-3.5" />
-          <span>并发队列</span>
+          <span>工作区</span>
           {runningSwarm > 0 && (
             <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold text-on-accent">
               {runningSwarm}

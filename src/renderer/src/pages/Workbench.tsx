@@ -1,19 +1,15 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
-import {
-  ChevronDown,
-  ChevronRight,
-  FilePlus2,
-  FileText,
-  Folder,
-  FolderOpen,
-  Lock,
-  RefreshCw,
-  Search,
-  Users
-} from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
-import type { AnnotationThread, AssetNode, ChatMessage, DiffProposal, ReviewMode, StreamChunkEvent } from '@shared/types'
+import type {
+  AnnotationThread,
+  ChatMessage,
+  DiffProposal,
+  ImportedFileItem,
+  ReviewMode,
+  StreamChunkEvent
+} from '@shared/types'
 import { useStudioStore } from '../store/useStudioStore'
 import { OfficeEditor } from '../components/editor/OfficeEditor'
 import { AgentChatPanel } from '../components/chat/AgentChatPanel'
@@ -21,6 +17,9 @@ import { VersionDrawer } from '../components/editor/VersionDrawer'
 import { ExportModal } from '../components/editor/ExportModal'
 import { AuditionModal } from '../components/editor/AuditionModal'
 import { StoryBoardModal } from '../components/editor/StoryBoardModal'
+import { AssetCategoryPanel, type AssetCategoryKey } from '../components/workbench/AssetCategoryPanel'
+import { AssetCompleteModal } from '../components/workbench/AssetCompleteModal'
+import { AgentCommsBoard } from '../components/workbench/AgentCommsBoard'
 
 interface WorkbenchProps {
   versionDrawerOpen: boolean
@@ -28,6 +27,8 @@ interface WorkbenchProps {
   exportModalOpen: boolean
   setExportModalOpen: (v: boolean) => void
 }
+
+const PROSE_INTENT_RE = /正文|续写|章节|开篇|撰写|改写|批注|创作/i
 
 export const Workbench: React.FC<WorkbenchProps> = ({
   versionDrawerOpen,
@@ -51,11 +52,16 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     contextSlices,
     setContextSlices,
     preComposedPrompt,
-    setChatMessages,
+    setPreComposedPrompt,
     appendChatMessage,
+    updateChatMessage,
     setStreamingState,
     activeRequestId,
     agentSelection,
+    ensureRoleAgentSnapshot,
+    appendAgentComm,
+    setActiveWork,
+    setReviewMode,
     config,
     setLintReport,
     setReviewHistory,
@@ -63,26 +69,28 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     setExternalChangedRelPath
   } = useStudioStore()
 
-  const [assetFilter, setAssetFilter] = useState('')
-  const [expandedDirs, setExpandedDirs] = useState<Record<string, boolean>>({
-    正文: true,
-    大纲: true,
-    设定: true,
-    剧本: true
-  })
   const [draftPrompt, setDraftPrompt] = useState('')
   const [focusMode, setFocusMode] = useState(false)
   const [newFileModal, setNewFileModal] = useState(false)
   const [newFileRelPath, setNewFileRelPath] = useState('正文/第002章_新章.md')
   const [auditionOpen, setAuditionOpen] = useState(false)
   const [storyBoardOpen, setStoryBoardOpen] = useState(false)
+  const [completeModalCat, setCompleteModalCat] = useState<AssetCategoryKey | null>(null)
+  const autoPlanTriggeredFor = useRef<string>('')
 
-  // Populate composer with pre-composed prompt when arriving from HomeHub
+  // Populate composer or trigger Coordinator initial planning when arriving from HomeHub
   useEffect(() => {
-    if (preComposedPrompt?.userDraftPrompt) {
+    if (!activeProject || !preComposedPrompt) return
+    if (preComposedPrompt.autoPlanOnEnter && autoPlanTriggeredFor.current !== activeProject.rootPath) {
+      autoPlanTriggeredFor.current = activeProject.rootPath
+      const planTaskTitle = preComposedPrompt.taskTitle || '立项创意构思'
+      const rawDraft = preComposedPrompt.userDraftPrompt
+      setPreComposedPrompt({ ...preComposedPrompt, autoPlanOnEnter: false })
+      void triggerCoordinatorPlan(planTaskTitle, rawDraft)
+    } else if (preComposedPrompt.userDraftPrompt && !preComposedPrompt.autoPlanOnEnter) {
       setDraftPrompt(preComposedPrompt.userDraftPrompt)
     }
-  }, [preComposedPrompt])
+  }, [activeProject, preComposedPrompt])
 
   // Subscribe to streaming chat chunks
   useEffect(() => {
@@ -98,10 +106,20 @@ export const Workbench: React.FC<WorkbenchProps> = ({
       } else if (ev.type === 'diff_proposal') {
         setPendingProposal(ev.proposal)
       } else if (ev.type === 'done') {
+        const isPlan = ev.requestId.startsWith('plan_')
         const msg: ChatMessage = {
           id: `msg_${Date.now()}`,
           role: 'assistant',
           content: ev.fullText,
+          kind: isPlan ? 'plan-proposal' : 'text',
+          ...(isPlan
+            ? {
+                planPayload: {
+                  taskTitle: state.preComposedPrompt?.taskTitle || '按当前思路执行创作',
+                  executePrompt: `请严格按照上述已讨论的基础创作思路与执行步骤开始创作第一阶段核心内容（先输出大纲/正文核心内容）：\n\n${ev.fullText.slice(0, 1800)}`
+                }
+              }
+            : {}),
           thinking: ev.thinkingText || undefined,
           timestamp: Date.now()
         }
@@ -115,6 +133,22 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         })
         if (state.activeProject) {
           void window.inknexus.chat.saveHistory(state.activeProject.rootPath, useStudioStore.getState().chatMessages)
+          setActiveWork({
+            projectId: state.activeProject.id,
+            projectRoot: state.activeProject.rootPath,
+            title: state.activeProject.title,
+            stage: 'idle',
+            statusLabel: '待命中',
+            activeRole: 'coordinator',
+            updatedAt: Date.now()
+          })
+          appendAgentComm({
+            projectRoot: state.activeProject.rootPath,
+            fromRole: isPlan ? 'coordinator' : 'writer',
+            toRole: 'user',
+            modelLabel: state.agentSelection.model,
+            content: isPlan ? '已向你提交基础创作思路，请确认后点击「按需执行」。' : '本轮生成任务已完成，成果已呈递审阅。'
+          })
         }
       } else if (ev.type === 'error') {
         toast.error(`Agent 执行失败：${ev.message}`)
@@ -123,10 +157,21 @@ export const Workbench: React.FC<WorkbenchProps> = ({
           activeRequestId: null,
           statusText: ''
         })
+        if (state.activeProject) {
+          setActiveWork({
+            projectId: state.activeProject.id,
+            projectRoot: state.activeProject.rootPath,
+            title: state.activeProject.title,
+            stage: 'idle',
+            statusLabel: '执行中断',
+            activeRole: 'coordinator',
+            updatedAt: Date.now()
+          })
+        }
       }
     })
     return unsub
-  }, [appendChatMessage, setPendingProposal, setStreamingState])
+  }, [appendAgentComm, appendChatMessage, setActiveWork, setPendingProposal, setStreamingState])
 
   const openFile = async (relPath: string, name?: string) => {
     if (!activeProject) return
@@ -135,7 +180,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
       const locked = canonLocks.includes(relPath)
       openOrFocusTab({
         relPath,
-        name: name || relPath.split('/').pop() || relPath,
+        name: name || relPath.split('/').pop()?.replace(/\.(md|txt)$/i, '') || relPath,
         content,
         savedContent: content,
         dirty: false,
@@ -173,10 +218,100 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     toast.success(!currentlyLocked ? '已锁定为正典只读' : '已解除正典锁定')
   }
 
-  const handleSendPrompt = async (customText?: string, runReviewPipeline = false) => {
+  const triggerCoordinatorPlan = async (taskTitle: string, basePrompt: string) => {
+    if (!activeProject) return
+    const coordinatorSel = ensureRoleAgentSnapshot(activeProject.rootPath, 'coordinator')
+    appendAgentComm({
+      projectRoot: activeProject.rootPath,
+      fromRole: 'user',
+      toRole: 'coordinator',
+      modelLabel: coordinatorSel.model,
+      content: `立项请求（${taskTitle}）：请先给出基础创作思路与执行方案。`
+    })
+    setActiveWork({
+      projectId: activeProject.id,
+      projectRoot: activeProject.rootPath,
+      title: activeProject.title,
+      stage: 'planning',
+      statusLabel: '主控构思中',
+      activeRole: 'coordinator',
+      updatedAt: Date.now()
+    })
+
+    const reqId = `plan_${Date.now()}`
+    setStreamingState({
+      isGenerating: true,
+      activeRequestId: reqId,
+      streamingText: '',
+      streamingThinking: '',
+      statusText: '主控拟定创作思路中...'
+    })
+
+    try {
+      await window.inknexus.chat.send({
+        requestId: reqId,
+        selection: coordinatorSel,
+        systemPrompt: `${preComposedPrompt?.systemPrompt ?? ''}\n\n你是本作《${activeProject.title}》的主控 Agent。现在不要直接铺写完整章节，请先给出清晰、可执行的基础创作思路（核心卖点、人物定位、世界/冲突结构、以及建议的 3 步执行计划），方便用户确认后点击「按需执行」或向你补充调整要求。`,
+        userPrompt: basePrompt || `请针对作品《${activeProject.title}》（${activeProject.mode}）拟定初步创作思路与推进计划。`,
+        projectRoot: activeProject.rootPath,
+        permissionMode: 'diff-review',
+        runReviewPipeline: false,
+        mode: activeProject.mode,
+        title: activeProject.title
+      })
+    } catch (err) {
+      setStreamingState({ isGenerating: false, activeRequestId: null })
+      toast.error(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const handleSendPrompt = async (
+    customText?: string,
+    runReviewPipeline = false,
+    overrideReviewMode?: ReviewMode
+  ) => {
     if (!activeProject) return
     const textToSend = (customText ?? draftPrompt).trim()
     if (!textToSend) return
+
+    const state = useStudioStore.getState()
+    const isProseTask =
+      PROSE_INTENT_RE.test(textToSend) ||
+      Boolean(activeTabRelPath && /^(正文|剧本)\//.test(activeTabRelPath))
+
+    // Item 8: When writing prose and user hasn't explicitly chosen a review mode yet,
+    // coordinator asks user in chat before calling writer/reviewers (unless running explicit review)
+    if (isProseTask && !runReviewPipeline && !overrideReviewMode && !state.reviewModeConfirmed) {
+      const userMsg: ChatMessage = {
+        id: `user_${Date.now()}`,
+        role: 'user',
+        content: textToSend,
+        timestamp: Date.now()
+      }
+      appendChatMessage(userMsg)
+      if (!customText) setDraftPrompt('')
+
+      const askMsg: ChatMessage = {
+        id: `ask_rev_${Date.now()}`,
+        role: 'assistant',
+        kind: 'review-mode-ask',
+        content: '在开始撰写正文前，请确认你希望采用的审查机制，随后我将按该模式调度作者与审查协同完成：',
+        reviewAskPayload: {
+          pendingPrompt: textToSend,
+          targetRelPath: activeTabRelPath ?? undefined
+        },
+        timestamp: Date.now()
+      }
+      appendChatMessage(askMsg)
+      appendAgentComm({
+        projectRoot: activeProject.rootPath,
+        fromRole: 'coordinator',
+        toRole: 'user',
+        content: '已向用户确认本次正文写作的审查机制。'
+      })
+      void window.inknexus.chat.saveHistory(activeProject.rootPath, useStudioStore.getState().chatMessages)
+      return
+    }
 
     const userMsg: ChatMessage = {
       id: `user_${Date.now()}`,
@@ -187,6 +322,31 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     appendChatMessage(userMsg)
     if (!customText) setDraftPrompt('')
 
+    const effectiveSelection = isProseTask
+      ? ensureRoleAgentSnapshot(activeProject.rootPath, 'writer')
+      : ensureRoleAgentSnapshot(activeProject.rootPath, 'coordinator')
+
+    const activeRole = isProseTask ? 'writer' : 'coordinator'
+    const chosenReviewMode = overrideReviewMode ?? state.reviewMode
+
+    appendAgentComm({
+      projectRoot: activeProject.rootPath,
+      fromRole: 'coordinator',
+      toRole: activeRole,
+      modelLabel: effectiveSelection.model,
+      content: textToSend.slice(0, 180) + (textToSend.length > 180 ? '...' : '')
+    })
+
+    setActiveWork({
+      projectId: activeProject.id,
+      projectRoot: activeProject.rootPath,
+      title: activeProject.title,
+      stage: runReviewPipeline ? 'reviewing' : isProseTask ? 'writing' : 'planning',
+      statusLabel: runReviewPipeline ? '写作与审查中' : isProseTask ? '写作中' : '主控调度中',
+      activeRole,
+      updatedAt: Date.now()
+    })
+
     const enabledContextNote = contextSlices
       .filter((s) => s.enabled)
       .map((s) => `- ${s.label} (${s.relPath})`)
@@ -194,9 +354,12 @@ export const Workbench: React.FC<WorkbenchProps> = ({
 
     const sysPrompt = [
       preComposedPrompt?.systemPrompt ??
-        `你是墨枢 InkNexus Studio 内的专业中文小说/剧本写作 Agent，当前作品《${activeProject.title}》（${activeProject.mode}）。`,
+        `你是墨枢 InkNexus Studio 内的专业中文小说/剧本创作 Agent，当前作品《${activeProject.title}》（${activeProject.mode}）。`,
+      isProseTask ? '除非用户另行指定，整部作品坚持单作者连贯执笔，确保叙事声口统一。' : '',
       enabledContextNote ? `\n当前已装载上下文清单（可通过工具按需读取）：\n${enabledContextNote}` : ''
-    ].join('\n')
+    ]
+      .filter(Boolean)
+      .join('\n')
 
     const reqId = `req_${Date.now()}`
     setStreamingState({
@@ -204,19 +367,19 @@ export const Workbench: React.FC<WorkbenchProps> = ({
       activeRequestId: reqId,
       streamingText: '',
       streamingThinking: '',
-      statusText: '准备上下文...'
+      statusText: isProseTask ? '作者执笔中...' : '主控处理中...'
     })
 
     try {
       await window.inknexus.chat.send({
         requestId: reqId,
-        selection: agentSelection,
+        selection: effectiveSelection,
         systemPrompt: sysPrompt,
         userPrompt: textToSend,
         projectRoot: activeProject.rootPath,
         targetRelPath: activeTabRelPath ?? undefined,
         permissionMode: config?.permissionMode ?? 'diff-review',
-        reviewMode: useStudioStore.getState().reviewMode,
+        reviewMode: chosenReviewMode,
         runReviewPipeline,
         mode: activeProject.mode,
         title: activeProject.title
@@ -225,6 +388,71 @@ export const Workbench: React.FC<WorkbenchProps> = ({
       setStreamingState({ isGenerating: false, activeRequestId: null })
       toast.error(err instanceof Error ? err.message : String(err))
     }
+  }
+
+  const handleExecutePlanMessage = async (msg: ChatMessage) => {
+    if (!activeProject || !msg.planPayload) return
+    updateChatMessage(msg.id, { actionExecuted: true })
+    await handleSendPrompt(msg.planPayload.executePrompt, false)
+  }
+
+  const handleConfirmReviewModeAsk = async (msg: ChatMessage, chosenMode: ReviewMode) => {
+    if (!activeProject || !msg.reviewAskPayload) return
+    setReviewMode(chosenMode, true)
+    updateChatMessage(msg.id, { actionExecuted: true })
+    appendAgentComm({
+      projectRoot: activeProject.rootPath,
+      fromRole: 'user',
+      toRole: 'coordinator',
+      content: `已确认审查方式：${chosenMode === 'self' ? '自审' : chosenMode === 'single' ? '单独审查' : '高级审查'}`
+    })
+    await handleSendPrompt(msg.reviewAskPayload.pendingPrompt, true, chosenMode)
+  }
+
+  const handleCreateChaptersFromOutline = async (params: {
+    outlineRelPath: string
+    scope: 'count' | 'full'
+    chapterCount: number
+    extraNote: string
+  }) => {
+    if (!activeProject) return
+    const outlineTitle = params.outlineRelPath.split('/').pop()?.replace(/\.(md|txt)$/i, '') || '大纲'
+    const goalDesc =
+      params.scope === 'full'
+        ? `严格依据大纲《${outlineTitle}》撰写全本连续正文章节（使用单一作者保持文风统一）`
+        : `严格依据大纲《${outlineTitle}》顺序撰写接下来的 ${params.chapterCount} 个正文章节（使用单一作者保持文风统一）`
+    const fullPrompt = `${goalDesc}。\n${params.extraNote ? `补充要求：${params.extraNote}` : ''}`
+    await handleSendPrompt(fullPrompt, useStudioStore.getState().reviewModeConfirmed)
+  }
+
+  const handleCompleteAsset = async (params: {
+    category: AssetCategoryKey
+    userIdeas: string
+    files: ImportedFileItem[]
+  }) => {
+    if (!activeProject) return
+    const catLabel = params.category === 'world' ? '世界观' : params.category === 'outline' ? '大纲' : '正文'
+    const refSnippet = params.files
+      .map((f) => `【参考资料：${f.fileName}】\n${f.markdownContent.slice(0, 2000)}`)
+      .join('\n\n')
+    const prompt = [
+      `请补全作品《${activeProject.title}》的「${catLabel}」部分，遵循本项目对应的创作 Skill 规范输出可直接落盘的正典文档内容。`,
+      params.userIdeas.trim() ? `【用户想法与补充信息】\n${params.userIdeas.trim()}` : '',
+      refSnippet
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+
+    setActiveWork({
+      projectId: activeProject.id,
+      projectRoot: activeProject.rootPath,
+      title: activeProject.title,
+      stage: 'completing',
+      statusLabel: `补全${catLabel}中`,
+      activeRole: 'coordinator',
+      updatedAt: Date.now()
+    })
+    await handleSendPrompt(prompt, false)
   }
 
   const handleQuickAIAction = (actionLabel: string, selectedText: string) => {
@@ -259,7 +487,7 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     await handleSendPrompt(composed.userDraftPrompt)
   }
 
-  const handleDispatchAllAnnotations = async () => {
+  const handleDispatchAllAnnotations = async (reviewAfter: boolean) => {
     if (!activeProject || !activeTabRelPath) return
     const tab = openTabs.find((t) => t.relPath === activeTabRelPath)
     const pending = annotations.filter((a) => a.filePath === activeTabRelPath && !a.resolved)
@@ -270,7 +498,13 @@ export const Workbench: React.FC<WorkbenchProps> = ({
       chapterText: tab.content,
       annotations: pending
     })
-    await handleSendPrompt(composed.userDraftPrompt)
+    appendAgentComm({
+      projectRoot: activeProject.rootPath,
+      fromRole: 'coordinator',
+      toRole: 'writer',
+      content: `按 ${pending.length} 条批注修改《${tab.name}》${reviewAfter ? '，修改完成后按所选模式复审' : ''}`
+    })
+    await handleSendPrompt(composed.userDraftPrompt, reviewAfter, reviewAfter ? useStudioStore.getState().reviewMode : undefined)
   }
 
   const handleApplyTextAsDiff = (proposedText: string, summary: string) => {
@@ -320,7 +554,23 @@ export const Workbench: React.FC<WorkbenchProps> = ({
       return
     }
     const mode = useStudioStore.getState().reviewMode
-    toast.info(`已发起「审查本章」（模式：${mode === 'self' ? '自审' : mode === 'single' ? '单独审查' : '高级审查'}）...`)
+    const revSel = ensureRoleAgentSnapshot(activeProject.rootPath, 'reviewer1')
+    setActiveWork({
+      projectId: activeProject.id,
+      projectRoot: activeProject.rootPath,
+      title: activeProject.title,
+      stage: 'reviewing',
+      statusLabel: '审查本章中',
+      activeRole: 'reviewer1',
+      updatedAt: Date.now()
+    })
+    appendAgentComm({
+      projectRoot: activeProject.rootPath,
+      fromRole: 'coordinator',
+      toRole: 'reviewer1',
+      modelLabel: revSel.model,
+      content: `派发「审查本章」任务（${activeTabRelPath} · ${mode}）`
+    })
     try {
       const history = await window.inknexus.reviews.runChapter({
         projectRoot: activeProject.rootPath,
@@ -328,32 +578,67 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         mode: activeProject.mode,
         title: activeProject.title,
         reviewMode: mode,
-        selection: agentSelection
+        selection: revSel
       })
       setReviewHistory(history)
-      toast.success('本章审查完成，报告已归档至审校面板')
+      toast.success('本章审查完成，报告已归档至审查面板')
     } catch (err) {
       toast.error(`审查本章失败：${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setActiveWork({
+        projectId: activeProject.id,
+        projectRoot: activeProject.rootPath,
+        title: activeProject.title,
+        stage: 'idle',
+        statusLabel: '待命中',
+        activeRole: 'coordinator',
+        updatedAt: Date.now()
+      })
     }
   }
 
   const handleRunFullBookReview = async (chosenMode?: ReviewMode) => {
     if (!activeProject) return
     const mode = chosenMode ?? useStudioStore.getState().reviewMode
-    const modeLabel = mode === 'self' ? '自审' : mode === 'single' ? '单独审查' : '高级审查'
-    toast.info(`正在执行「全文审查」（${modeLabel}）《${activeProject.title}》...`)
+    const revSel = ensureRoleAgentSnapshot(activeProject.rootPath, 'reviewer1')
+    setActiveWork({
+      projectId: activeProject.id,
+      projectRoot: activeProject.rootPath,
+      title: activeProject.title,
+      stage: 'reviewing',
+      statusLabel: '全文审查中',
+      activeRole: 'reviewer1',
+      updatedAt: Date.now()
+    })
+    appendAgentComm({
+      projectRoot: activeProject.rootPath,
+      fromRole: 'coordinator',
+      toRole: 'reviewer1',
+      modelLabel: revSel.model,
+      content: `派发「全文审查」任务（${mode}）`
+    })
     try {
       const history = await window.inknexus.reviews.runFullBook({
         projectRoot: activeProject.rootPath,
         mode: activeProject.mode,
         title: activeProject.title,
         reviewMode: mode,
-        selection: agentSelection
+        selection: revSel
       })
       setReviewHistory(history)
       toast.success('全文审查完成，最新报告已置顶显示')
     } catch (err) {
       toast.error(`全文审查失败：${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setActiveWork({
+        projectId: activeProject.id,
+        projectRoot: activeProject.rootPath,
+        title: activeProject.title,
+        stage: 'idle',
+        statusLabel: '待命中',
+        activeRole: 'coordinator',
+        updatedAt: Date.now()
+      })
     }
   }
 
@@ -369,49 +654,6 @@ export const Workbench: React.FC<WorkbenchProps> = ({
       toast.error(err instanceof Error ? err.message : String(err))
     }
   }
-
-  const renderTree = (nodes: AssetNode[], depth = 0) =>
-    nodes
-      .filter((n) => !assetFilter || n.name.toLowerCase().includes(assetFilter.toLowerCase()) || n.isDirectory)
-      .map((node) => {
-        if (node.isDirectory) {
-          const open = expandedDirs[node.relPath] ?? depth === 0
-          return (
-            <div key={node.id}>
-              <button
-                type="button"
-                onClick={() => setExpandedDirs((d) => ({ ...d, [node.relPath]: !open }))}
-                style={{ paddingLeft: `${depth * 12 + 8}px` }}
-                className="flex w-full items-center gap-1.5 rounded-lg py-1.5 pr-2 text-left text-xs font-medium text-text-secondary hover:bg-surface-raised hover:text-text-primary"
-              >
-                {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
-                {open ? <FolderOpen className="h-3.5 w-3.5 shrink-0 text-accent" /> : <Folder className="h-3.5 w-3.5 shrink-0 text-accent" />}
-                <span className="truncate">{node.name}</span>
-              </button>
-              {open && node.children && <div>{renderTree(node.children, depth + 1)}</div>}
-            </div>
-          )
-        }
-
-        const isActive = node.relPath === activeTabRelPath
-        return (
-          <button
-            key={node.id}
-            type="button"
-            onClick={() => void openFile(node.relPath, node.name)}
-            style={{ paddingLeft: `${depth * 12 + 22}px` }}
-            className={`group flex w-full items-center gap-1.5 rounded-lg py-1.5 pr-2 text-left text-xs transition ${
-              isActive
-                ? 'bg-accent-soft font-semibold text-accent'
-                : 'text-text-primary hover:bg-surface-raised'
-            }`}
-          >
-            <FileText className="h-3.5 w-3.5 shrink-0 opacity-75" />
-            <span className="min-w-0 flex-1 truncate">{node.name}</span>
-            {node.locked && <Lock className="h-3 w-3 shrink-0 text-warning" />}
-          </button>
-        )
-      })
 
   if (!activeProject) {
     return (
@@ -447,51 +689,31 @@ export const Workbench: React.FC<WorkbenchProps> = ({
       <PanelGroup direction="horizontal" className="h-full">
         {!focusMode && (
           <>
-            <Panel defaultSize={19} minSize={14} maxSize={28}>
-              <aside className="flex h-full flex-col border-r border-border bg-surface/80 backdrop-blur-md">
-                <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
-                  <span className="text-xs font-semibold text-text-primary">作品资产</span>
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      title="人物状态与伏笔看板"
-                      onClick={() => setStoryBoardOpen(true)}
-                      className="rounded-lg p-1 text-text-secondary hover:bg-accent-soft hover:text-accent"
-                    >
-                      <Users className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      title="新建章节或设定文件"
-                      onClick={() => setNewFileModal(true)}
-                      className="rounded-lg p-1 text-text-secondary hover:bg-accent-soft hover:text-accent"
-                    >
-                      <FilePlus2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="p-2.5">
-                  <div className="flex items-center gap-1.5 rounded-xl border border-border bg-surface-raised px-2.5 py-1.5 text-xs">
-                    <Search className="h-3.5 w-3.5 text-text-muted" />
-                    <input
-                      type="text"
-                      value={assetFilter}
-                      onChange={(e) => setAssetFilter(e.target.value)}
-                      placeholder="筛选章节或设定..."
-                      className="w-full bg-transparent text-text-primary outline-none"
+            <Panel defaultSize={21} minSize={15} maxSize={30}>
+              <aside className="flex h-full flex-col border-r border-border">
+                <PanelGroup direction="vertical" className="h-full">
+                  <Panel defaultSize={44} minSize={24}>
+                    <AssetCategoryPanel
+                      assets={assets}
+                      activeTabRelPath={activeTabRelPath}
+                      onOpenFile={openFile}
+                      onOpenCompleteModal={(cat) => setCompleteModalCat(cat)}
+                      onOpenNewFileModal={() => setNewFileModal(true)}
+                      onOpenStoryBoard={() => setStoryBoardOpen(true)}
                     />
-                  </div>
-                </div>
-
-                <div className="flex-1 space-y-0.5 overflow-y-auto px-2 pb-4">{renderTree(assets)}</div>
+                  </Panel>
+                  <PanelResizeHandle className="h-1.5 bg-border/35 transition hover:bg-accent/40" />
+                  <Panel defaultSize={56} minSize={28}>
+                    <AgentCommsBoard />
+                  </Panel>
+                </PanelGroup>
               </aside>
             </Panel>
             <PanelResizeHandle className="w-1.5 bg-transparent transition hover:bg-accent/30" />
           </>
         )}
 
-        <Panel defaultSize={focusMode ? 100 : 51} minSize={35}>
+        <Panel defaultSize={focusMode ? 100 : 49} minSize={35}>
           <OfficeEditor
             onSaveFile={handleSaveCurrent}
             onToggleLock={handleToggleLock}
@@ -508,11 +730,14 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         {!focusMode && (
           <>
             <PanelResizeHandle className="w-1.5 bg-transparent transition hover:bg-accent/30" />
-            <Panel defaultSize={30} minSize={22} maxSize={42}>
+            <Panel defaultSize={30} minSize={24} maxSize={42}>
               <AgentChatPanel
                 draftPrompt={draftPrompt}
                 setDraftPrompt={setDraftPrompt}
                 onSendPrompt={handleSendPrompt}
+                onExecutePlanMessage={handleExecutePlanMessage}
+                onConfirmReviewModeAsk={handleConfirmReviewModeAsk}
+                onCreateChaptersFromOutline={handleCreateChaptersFromOutline}
                 onAbort={() => activeRequestId && void window.inknexus.chat.abort(activeRequestId)}
                 onApplyTextAsDiff={handleApplyTextAsDiff}
                 onDispatchAnnotation={handleDispatchAnnotation}
@@ -555,6 +780,13 @@ export const Workbench: React.FC<WorkbenchProps> = ({
           </div>
         </div>
       )}
+
+      <AssetCompleteModal
+        open={completeModalCat !== null}
+        category={completeModalCat ?? 'world'}
+        onClose={() => setCompleteModalCat(null)}
+        onSubmit={handleCompleteAsset}
+      />
 
       <VersionDrawer
         open={versionDrawerOpen}

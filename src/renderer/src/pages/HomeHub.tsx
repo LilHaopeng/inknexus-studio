@@ -22,6 +22,7 @@ interface HomeHubProps {
     projectRoot: string
     entryRelPath?: string
     prePrompt?: PreComposedPrompt
+    autoStartCoordinatorPlan?: boolean
   }) => Promise<void>
 }
 
@@ -40,31 +41,31 @@ const MODE_CARDS: Array<{
     tags: ['小说三件套', '正典锁版'],
     icon: BookOpen,
     subTemplates: [
-      { id: 'long-standard', label: '标准长篇（L0–L4 + 核心台账）' },
-      { id: 'long-deep', label: '深度推演（多 POV / 复杂制度）' }
+      { id: 'long-standard', label: '标准长篇' },
+      { id: 'long-deep', label: '深度推演' }
     ]
   },
   {
     mode: 'short-webnovel',
     title: '短篇网文',
     subtitle: '高概念脑洞 · 爽感节拍 · 手机竖屏',
-    tags: ['1-5万字', '网感体检'],
+    tags: ['短篇快反', '网感体检'],
     icon: Zap,
     subTemplates: [
-      { id: 'short-flash', label: '超短篇（1-3万字，盐选/番茄短故事）' },
-      { id: 'short-microdrama', label: '微短剧式短中篇（2-5万字，强卡点）' }
+      { id: 'short-flash', label: '超短篇' },
+      { id: 'short-microdrama', label: '微短剧式短中篇' }
     ]
   },
   {
     mode: 'drama-script',
     title: 'AI 剧本',
     subtitle: 'AI 短剧 · 漫剧 · 沙雕剧 · 资产表',
-    tags: ['分集卡点', '红果40×'],
+    tags: ['分集卡点', '漫剧剧本'],
     icon: Clapperboard,
     subTemplates: [
-      { id: 'drama-ai-real', label: '常规仿真人 AI 短剧（MiniMax-H3）' },
-      { id: 'drama-comic', label: '高奇观 AI 漫剧（comic-drama）' },
-      { id: 'drama-shadiao', label: '高频反转沙雕短剧（shadiao）' }
+      { id: 'drama-ai-real', label: '仿真人 AI 短剧' },
+      { id: 'drama-comic', label: '高奇观 AI 漫剧' },
+      { id: 'drama-shadiao', label: '高频反转沙雕短剧' }
     ]
   }
 ]
@@ -72,7 +73,6 @@ const MODE_CARDS: Array<{
 export const HomeHub: React.FC<HomeHubProps> = ({ onLaunchProject }) => {
   const { projects, setPage, agentSelection, setAgentSelection } = useStudioStore()
   const [ideaText, setIdeaText] = useState('')
-  const [workflowPref, setWorkflowPref] = useState<'auto' | CreationMode>('auto')
   const [showModePicker, setShowModePicker] = useState(false)
   const [selectedMode, setSelectedMode] = useState<CreationMode>('long-novel')
   const [subTemplate, setSubTemplate] = useState<SubTemplateId>('long-standard')
@@ -84,11 +84,6 @@ export const HomeHub: React.FC<HomeHubProps> = ({ onLaunchProject }) => {
   const [parsingImport, setParsingImport] = useState(false)
 
   const handleStartCreationClick = () => {
-    if (workflowPref !== 'auto') {
-      setSelectedMode(workflowPref)
-      const card = MODE_CARDS.find((c) => c.mode === workflowPref)
-      if (card) setSubTemplate(card.subTemplates[0].id)
-    }
     setShowModePicker((v) => !v)
   }
 
@@ -110,7 +105,8 @@ export const HomeHub: React.FC<HomeHubProps> = ({ onLaunchProject }) => {
       await onLaunchProject({
         projectRoot: created.summary.rootPath,
         entryRelPath: created.entryRelPath,
-        prePrompt
+        prePrompt,
+        autoStartCoordinatorPlan: true
       })
     } finally {
       setCreating(false)
@@ -199,21 +195,18 @@ export const HomeHub: React.FC<HomeHubProps> = ({ onLaunchProject }) => {
                 <Paperclip className="h-3.5 w-3.5" />
                 添加参考资料
               </button>
-
-              <select
-                aria-label="工作流选择"
-                value={workflowPref}
-                onChange={(e) => setWorkflowPref(e.target.value as 'auto' | CreationMode)}
-                className="h-9 rounded-xl border border-border bg-surface-raised px-3 text-xs font-medium text-text-primary outline-none hover:border-accent/50"
-              >
-                <option value="auto">自动选择工作流</option>
-                <option value="long-novel">长文小说（小说三件套）</option>
-                <option value="short-webnovel">短篇网文（1-5万字）</option>
-                <option value="drama-script">AI 剧本（短剧/漫剧）</option>
-              </select>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-1 flex-wrap items-center justify-end gap-3">
+              <div className="min-w-[290px] max-w-md flex-1">
+                <AgentSelectorBar
+                  value={agentSelection}
+                  onChange={setAgentSelection}
+                  compact
+                  hideBackend
+                  onlyReady
+                />
+              </div>
               <span className="text-xs text-text-muted">{ideaText.length > 0 ? `${ideaText.length} 字` : '不限字数'}</span>
               <button
                 type="button"
@@ -224,13 +217,6 @@ export const HomeHub: React.FC<HomeHubProps> = ({ onLaunchProject }) => {
                 <span>开始创作</span>
                 <ArrowRight className="h-4 w-4" />
               </button>
-            </div>
-          </div>
-
-          <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-2.5">
-            <span className="text-[11px] font-medium text-text-muted">执行引擎 / 模型 / 思考强度（左右拖动）：</span>
-            <div className="min-w-[380px] flex-1 max-w-2xl">
-              <AgentSelectorBar value={agentSelection} onChange={setAgentSelection} compact />
             </div>
           </div>
 
@@ -351,7 +337,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({ onLaunchProject }) => {
                   {parsingImport ? '正在解析导入文件...' : '导入已有作品或素材（支持多选与整目录拖入）'}
                 </h2>
                 <p className="mt-0.5 text-xs text-text-secondary">
-                  支持 DOCX、TXT、Markdown 文件及完整作品目录；上传后可标注为世界观、大纲、正文或自定义标签，并预埋对应 Prompt
+                  支持 PDF、DOCX、TXT、Markdown 文件及完整作品目录；上传后可标注为世界观、大纲、正文或自定义标签，并预埋对应 Prompt
                 </p>
               </div>
             </div>
@@ -395,7 +381,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({ onLaunchProject }) => {
 
           {recentProjects.length === 0 ? (
             <div className="glass-card p-6 text-center text-xs text-text-muted">
-              当前工作区暂无作品，点击上方「开始创作」或拖入任意 DOCX / TXT / Markdown 即可开始。
+              当前工作区暂无作品，点击上方「开始创作」或拖入任意 PDF / DOCX / TXT / Markdown 即可开始。
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -464,7 +450,8 @@ export const HomeHub: React.FC<HomeHubProps> = ({ onLaunchProject }) => {
             await onLaunchProject({
               projectRoot: res.summary.rootPath,
               entryRelPath: res.primaryRelPath,
-              prePrompt
+              prePrompt,
+              autoStartCoordinatorPlan: true
             })
           }}
         />

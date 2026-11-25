@@ -3,7 +3,7 @@ import path from 'path'
 import os from 'os'
 import { execFile } from 'child_process'
 import type { SkillId, SkillRegistryItem } from '@shared/types'
-import { AppDataStore } from '../storage/appdata-store'
+import { AppDataStore, copyDirRecursiveSync } from '../storage/appdata-store'
 import { SkillLoader, parseSkillVersion } from '../orchestrator/skill-loader'
 
 export interface SkillRepoSpec {
@@ -181,7 +181,7 @@ export class SkillUpdaterService {
 
       const targetRoot = path.join(this.skillLoader.getWritableInstallRoot(), skillId)
       if (fs.existsSync(targetRoot)) fs.rmSync(targetRoot, { recursive: true, force: true })
-      fs.cpSync(sourceRoot, targetRoot, { recursive: true })
+      copyDirRecursiveSync(sourceRoot, targetRoot)
 
       const checked = await this.checkSkillUpdate(skillId)
       if (checked.remoteSha) {

@@ -1,318 +1,348 @@
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
+import { toast } from 'sonner'
+import type { ActiveWorkEntry, AgentRoleId, SwarmJob, SwarmStage } from '@shared/types'
+import { useStudioStore } from '../store/useStudioStore'
 import {
-  AlertTriangle,
+  Activity,
   CheckCircle2,
-  GitCompare,
+  ExternalLink,
   Pause,
   Play,
-  Plus,
   RotateCcw,
+  Sparkles,
+  Square,
   Trash2,
-  Workflow,
-  X
+  XCircle
 } from 'lucide-react'
-import type { AgentSelection, CreationMode, ReviewMode, SwarmJob } from '@shared/types'
-import { useStudioStore } from '../store/useStudioStore'
-import { AgentSelectorBar } from '../components/ui/AgentSelectorBar'
-import { ReviewModeSelector } from '../components/ui/ReviewModeSelector'
 
-interface SwarmQueuePageProps {
-  onOpenJobInWorkbench: (job: SwarmJob) => Promise<void>
+const STAGE_LABEL_MAP: Record<ActiveWorkEntry['stage'], string> = {
+  idle: '待命',
+  planning: '主控构思中',
+  completing: '补全资产中',
+  writing: '写作中',
+  reviewing: '审查中',
+  revising: '按批注修改中'
 }
 
-export const SwarmQueuePage: React.FC<SwarmQueuePageProps> = ({ onOpenJobInWorkbench }) => {
-  const { swarmJobs, projects, config, setConfig, agentSelection } = useStudioStore()
-  const [showNewModal, setShowNewModal] = useState(false)
-  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([])
-  const [targetRelPath, setTargetRelPath] = useState('正文/第001章_新稿.md')
-  const [prompt, setPrompt] = useState('请结合本作大纲与声口卡，完成当前章节正文创作。')
-  const [reviewMode, setReviewMode] = useState<ReviewMode>('single')
-  const [writer, setWriter] = useState<AgentSelection>(agentSelection)
-  const [reviewer1, setReviewer1] = useState<AgentSelection>(agentSelection)
-  const [reviewer2, setReviewer2] = useState<AgentSelection>(agentSelection)
+const ROLE_LABEL_MAP: Record<AgentRoleId, string> = {
+  coordinator: '主控',
+  writer: '作者',
+  reviewer1: '审查1',
+  reviewer2: '审查2'
+}
 
-  const concurrency = config?.maxSwarmConcurrency ?? 3
+function getSwarmStageLabel(stage: SwarmStage): string {
+  switch (stage) {
+    case 'queued':
+      return '排队等待'
+    case 'writing':
+      return '写作中'
+    case 'linting':
+      return '视听/文本体检'
+    case 'self_review':
+      return '自审中'
+    case 'review_round_1':
+      return '一审审查中'
+    case 'revising_1':
+      return '一轮修稿中'
+    case 'review_round_2':
+      return '二审终核中'
+    case 'revising_2':
+      return '二轮修稿中'
+    case 'awaiting_user':
+      return '待确认写入'
+    case 'paused':
+      return '已暂停'
+    case 'failed':
+      return '异常中止'
+    case 'cancelled':
+      return '已取消'
+    default:
+      return stage
+  }
+}
 
-  const handleConcurrencyChange = async (n: number) => {
+export const SwarmQueuePage: React.FC<{
+  onOpenJobInWorkbench: (job: SwarmJob) => void
+  onOpenProjectInWorkbench?: (projectRoot: string, entryRelPath?: string) => void
+}> = ({ onOpenJobInWorkbench, onOpenProjectInWorkbench }) => {
+  const { swarmJobs, setSwarmJobs, config, setConfig, activeWorks } = useStudioStore()
+  const [filter, setFilter] = useState<'all' | 'active' | 'done'>('all')
+
+  const liveWorkList = useMemo(
+    () =>
+      Object.values(activeWorks).sort((a, b) => {
+        if (a.stage !== 'idle' && b.stage === 'idle') return -1
+        if (a.stage === 'idle' && b.stage !== 'idle') return 1
+        return b.updatedAt - a.updatedAt
+      }),
+    [activeWorks]
+  )
+
+  const filteredJobs = swarmJobs.filter((j) => {
+    const isDone = j.stage === 'awaiting_user' || j.stage === 'failed' || j.stage === 'cancelled'
+    if (filter === 'active') return !isDone
+    if (filter === 'done') return isDone
+    return true
+  })
+
+  const handleConcurrency = async (n: number) => {
     await window.inknexus.swarm.setConcurrency(n)
     const updated = await window.inknexus.config.save({ maxSwarmConcurrency: n })
     setConfig(updated)
+    toast.success(`工作区最大并发已调整为 ${n}`)
   }
 
-  const handleEnqueueBatch = async () => {
-    const chosen = projects.filter((p) => selectedProjectIds.includes(p.id))
-    if (chosen.length === 0) return
-    await window.inknexus.swarm.enqueueBatch(
-      chosen.map((p) => ({
-        title: p.title,
-        projectRoot: p.rootPath,
-        targetRelPath: p.mode === 'drama-script' ? '剧本/第001集_开篇.md' : targetRelPath,
-        mode: p.mode as CreationMode,
-        prompt,
-        reviewMode,
-        writer,
-        reviewer1: reviewMode !== 'self' ? reviewer1 : undefined,
-        reviewer2: reviewMode === 'advanced' ? reviewer2 : undefined
-      }))
-    )
-    setShowNewModal(false)
-    setSelectedProjectIds([])
+  const handleClearCompleted = async () => {
+    const remaining = await window.inknexus.storage.clearSwarm()
+    setSwarmJobs(remaining)
+    toast.success('已清理已结束后台任务记录')
   }
 
   return (
     <div className="relative z-10 h-full overflow-y-auto px-8 py-6">
-      <div className="mx-auto max-w-6xl space-y-5">
+      <div className="mx-auto max-w-6xl space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="flex items-center gap-2 text-2xl font-bold text-text-primary">
-              <Workflow className="h-6 w-6 text-accent" />
-              多小说并发队列与审查中心
-            </h1>
-            <p className="mt-1 text-xs text-text-secondary">
-              多部小说独立分配 Agent 并发撰写；写完后按所选审查机制（自审 / 单独审查 / 高级双审）自动流转至 Diff 待验收区
-            </p>
+            <h1 className="text-2xl font-bold text-text-primary">工作区</h1>
+            <p className="mt-1 text-sm text-text-secondary">目前正在工作的小说</p>
           </div>
 
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 rounded-xl border border-border bg-surface-raised px-3 py-1.5 text-xs">
-              <span className="text-text-secondary">最大并发数</span>
-              <input
-                type="range"
-                min={1}
-                max={6}
-                value={concurrency}
-                onChange={(e) => void handleConcurrencyChange(Number(e.target.value))}
-                className="w-20 accent-[#7453DC]"
-              />
-              <span className="font-semibold text-accent">{concurrency}</span>
+              <span className="text-text-muted">并发数</span>
+              {[1, 2, 3, 4].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => void handleConcurrency(n)}
+                  className={`rounded-md px-2 py-0.5 font-medium transition ${
+                    (config?.maxSwarmConcurrency ?? 2) === n
+                      ? 'bg-accent text-on-accent'
+                      : 'text-text-secondary hover:text-text-primary'
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
             </div>
-
             <button
               type="button"
-              onClick={() => setShowNewModal(true)}
-              className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-gradient-to-r from-[#7855DA] to-[#684BD2] px-4 text-xs font-semibold text-white shadow-md hover:opacity-95"
+              onClick={() => void handleClearCompleted()}
+              className="rounded-xl border border-border bg-surface-raised px-3 py-2 text-xs text-text-secondary hover:border-danger hover:text-danger"
             >
-              <Plus className="h-4 w-4" />
-              派发并发写作任务
+              清理已结束任务
             </button>
           </div>
         </div>
 
-        {/* Queue List */}
-        {swarmJobs.length === 0 ? (
-          <div className="glass-panel p-10 text-center">
-            <Workflow className="mx-auto mb-3 h-10 w-10 text-accent/60" />
-            <h3 className="text-sm font-semibold text-text-primary">当前并发队列为空</h3>
-            <p className="mt-1 text-xs text-text-muted">
-              点击右上角「派发并发写作任务」，可一次勾选多部小说并发分配给独立 Agent，并指定自审 / 单独审查 / 高级双审流程
-            </p>
+        {/* 实时工作区小说追踪（与工作台 & 书架状态同步） */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs font-semibold text-text-primary">
+              <Activity className="h-4 w-4 text-accent" />
+              <span>实时协作与状态追踪（{liveWorkList.length}）</span>
+            </div>
           </div>
-        ) : (
-          <div className="space-y-3">
-            {swarmJobs.map((job) => (
-              <div key={job.id} className="glass-panel p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-text-primary">《{job.config.title}》</span>
-                      <span className="rounded-md bg-accent-soft px-2 py-0.5 text-[11px] font-medium text-accent">
-                        {job.config.reviewMode === 'self'
-                          ? '自审'
-                          : job.config.reviewMode === 'single'
-                            ? '单独审查 (1写+1审)'
-                            : '高级审查 (1写+2审)'}
-                      </span>
-                      {job.config.reviewMode === 'advanced' && (
-                        <span className="inline-flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400">
-                          <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
-                          高 Token 模式
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-1 text-xs text-text-secondary">
-                      状态：<strong className="text-text-primary">{job.progressLabel}</strong> · 目标文件：{job.config.targetRelPath}
-                    </div>
-                  </div>
 
-                  <div className="flex items-center gap-1.5">
-                    {job.stage === 'awaiting_user' && (
-                      <button
-                        type="button"
-                        onClick={() => void onOpenJobInWorkbench(job)}
-                        className="inline-flex items-center gap-1 rounded-xl bg-accent px-3 py-1.5 text-xs font-semibold text-on-accent hover:bg-accent-hover"
-                      >
-                        <GitCompare className="h-3.5 w-3.5" />
-                        去工作台验收 Diff
-                      </button>
-                    )}
-                    {['queued', 'writing', 'review_round_1', 'review_round_2'].includes(job.stage) && (
-                      <button
-                        type="button"
-                        onClick={() => void window.inknexus.swarm.pause(job.id)}
-                        className="rounded-lg border border-border p-1.5 text-text-secondary hover:text-warning"
-                        title="暂停"
-                      >
-                        <Pause className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                    {['paused', 'failed', 'cancelled'].includes(job.stage) && (
-                      <button
-                        type="button"
-                        onClick={() => void window.inknexus.swarm.resume(job.id)}
-                        className="rounded-lg border border-border p-1.5 text-text-secondary hover:text-success"
-                        title="继续或重试"
-                      >
-                        {job.stage === 'failed' ? <RotateCcw className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => void window.inknexus.swarm.delete(job.id)}
-                      className="rounded-lg border border-border p-1.5 text-text-muted hover:text-danger"
-                      title="移除"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                {job.reviewReports.length > 0 && (
-                  <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-                    {job.reviewReports.map((r, i) => (
-                      <div key={i} className="rounded-xl border border-border bg-surface-raised p-2.5 text-xs">
-                        <div className="flex items-center justify-between font-medium">
-                          <span>
-                            第 {r.round} 审 · {r.reviewer}
-                          </span>
-                          <span className={r.verdict === 'PASS' ? 'text-success' : 'text-warning'}>
-                            {r.verdict === 'PASS' ? (
-                              <span className="inline-flex items-center gap-1">
-                                <CheckCircle2 className="h-3.5 w-3.5" /> 通过
-                              </span>
-                            ) : (
-                              '打回修订'
-                            )}
+          {liveWorkList.length === 0 ? (
+            <div className="glass-card p-6 text-center text-xs text-text-muted">
+              当前暂无活跃写作或审查中的小说；在创作大厅发起项目或进入工作台后，实时进度将在此同步显示。
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {liveWorkList.map((work) => {
+                const isRunning = work.stage !== 'idle'
+                return (
+                  <div
+                    key={work.projectRoot}
+                    className={`glass-card flex flex-col justify-between p-4 transition ${
+                      isRunning ? 'active-work-card' : ''
+                    }`}
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-text-primary">{work.title}</span>
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                              isRunning
+                                ? 'bg-accent text-on-accent'
+                                : 'border border-border bg-surface text-text-muted'
+                            }`}
+                          >
+                            {isRunning && <Sparkles className="h-2.5 w-2.5 animate-pulse" />}
+                            {STAGE_LABEL_MAP[work.stage]}
                           </span>
                         </div>
-                        <p className="mt-1 text-text-secondary">{r.summary}</p>
+                        <span className="rounded-md bg-accent-soft px-2 py-0.5 text-[10px] font-medium text-accent">
+                          当前角色：{ROLE_LABEL_MAP[work.activeRole] ?? work.activeRole}
+                        </span>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
 
-      {/* New Batch Swarm Modal */}
-      {showNewModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-xs">
-          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">
-            <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
-              <h3 className="text-base font-semibold text-text-primary">配置多小说并发队列任务</h3>
-              <button type="button" onClick={() => setShowNewModal(false)}>
-                <X className="h-4 w-4 text-text-muted" />
-              </button>
-            </div>
+                      <div className="rounded-lg border border-border/60 bg-surface/65 px-2.5 py-1.5 text-xs text-text-secondary">
+                        {work.statusLabel}
+                      </div>
+                    </div>
 
-            <div className="space-y-4 overflow-y-auto p-5 text-xs">
-              <div>
-                <label className="mb-1.5 block font-semibold text-text-secondary">
-                  1. 勾选要并发分发的小说作品（每本独占独立 Agent，可多选）
-                </label>
-                <div className="grid max-h-36 grid-cols-2 gap-2 overflow-y-auto rounded-xl border border-border bg-surface-raised p-2.5">
-                  {projects.map((p) => {
-                    const checked = selectedProjectIds.includes(p.id)
-                    return (
-                      <label
-                        key={p.id}
-                        className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 ${
-                          checked ? 'border-accent bg-accent-soft/60 text-accent' : 'border-transparent hover:bg-surface'
-                        }`}
+                    <div className="mt-3 flex items-center justify-between text-[11px] text-text-muted">
+                      <span>更新于 {new Date(work.updatedAt).toLocaleTimeString()}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onOpenProjectInWorkbench) {
+                            onOpenProjectInWorkbench(work.projectRoot)
+                          }
+                        }}
+                        className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-hover"
                       >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(e) => {
-                            if (e.target.checked) setSelectedProjectIds((ids) => [...ids, p.id])
-                            else setSelectedProjectIds((ids) => ids.filter((id) => id !== p.id))
-                          }}
-                        />
-                        <span className="truncate font-medium">{p.title}</span>
-                      </label>
-                    )
-                  })}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="mb-1 block font-semibold text-text-secondary">写入目标相对路径</label>
-                  <input
-                    type="text"
-                    value={targetRelPath}
-                    onChange={(e) => setTargetRelPath(e.target.value)}
-                    className="w-full rounded-xl border border-border bg-surface-raised px-3 py-2 outline-none focus:border-accent"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block font-semibold text-text-secondary">写作任务指令</label>
-                  <input
-                    type="text"
-                    value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
-                    className="w-full rounded-xl border border-border bg-surface-raised px-3 py-2 outline-none focus:border-accent"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-1 block font-semibold text-text-secondary">2. 写作 Worker 引擎</label>
-                <AgentSelectorBar value={writer} onChange={setWriter} />
-              </div>
-
-              <ReviewModeSelector value={reviewMode} onChange={setReviewMode} />
-
-              {reviewMode !== 'self' && (
-                <div>
-                  <label className="mb-1 block font-semibold text-text-secondary">
-                    一审审查员（逻辑 / 正典 / 红线）
-                  </label>
-                  <AgentSelectorBar value={reviewer1} onChange={setReviewer1} />
-                </div>
-              )}
-
-              {reviewMode === 'advanced' && (
-                <div>
-                  <label className="mb-1 block font-semibold text-text-secondary">
-                    二审审查员（换另一位审查员复核声口与节奏）
-                  </label>
-                  <AgentSelectorBar value={reviewer2} onChange={setReviewer2} />
-                </div>
-              )}
+                        <ExternalLink className="h-3 w-3" />
+                        查看工作台
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
+          )}
+        </div>
 
-            <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
-              <button
-                type="button"
-                onClick={() => setShowNewModal(false)}
-                className="rounded-xl border border-border px-4 py-2 text-xs text-text-secondary"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                disabled={selectedProjectIds.length === 0}
-                onClick={() => void handleEnqueueBatch()}
-                className="rounded-xl bg-gradient-to-r from-[#7855DA] to-[#684BD2] px-5 py-2 text-xs font-semibold text-white disabled:opacity-45"
-              >
-                启动并发队列（{selectedProjectIds.length} 部）
-              </button>
+        {/* 后台批量生成与审校任务 */}
+        <div className="space-y-3 pt-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-semibold text-text-primary">后台批量生成与审查队列（{swarmJobs.length}）</span>
+            <div className="flex items-center gap-1.5">
+              {(
+                [
+                  { id: 'all', label: `全部 (${swarmJobs.length})` },
+                  {
+                    id: 'active',
+                    label: `进行中 (${
+                      swarmJobs.filter((j) => !['awaiting_user', 'failed', 'cancelled'].includes(j.stage)).length
+                    })`
+                  },
+                  {
+                    id: 'done',
+                    label: `已结束 (${
+                      swarmJobs.filter((j) => ['awaiting_user', 'failed', 'cancelled'].includes(j.stage)).length
+                    })`
+                  }
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setFilter(tab.id)}
+                  className={`rounded-lg px-2.5 py-1 text-xs transition ${
+                    filter === tab.id
+                      ? 'bg-accent-soft font-medium text-accent'
+                      : 'border border-border bg-surface-raised text-text-secondary'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
           </div>
+
+          {filteredJobs.length === 0 ? (
+            <div className="glass-card p-8 text-center text-xs text-text-muted">
+              当前没有后台批量任务；可在大纲审阅时点击「开始创建正文章节」批量派发或由主控按需拉起子 Agent。
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {filteredJobs.map((job) => {
+                const isRunning = !['awaiting_user', 'failed', 'cancelled', 'paused'].includes(job.stage)
+                return (
+                  <div
+                    key={job.id}
+                    className={`glass-card flex items-center justify-between gap-4 p-4 ${
+                      isRunning ? 'active-work-card' : ''
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-semibold text-text-primary">{job.config.title}</span>
+                        <span className="rounded-md bg-accent-soft px-2 py-0.5 text-[10px] font-medium text-accent">
+                          {getSwarmStageLabel(job.stage)}
+                        </span>
+                        <span className="text-[11px] text-text-muted">{job.config.writer.model}</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-text-secondary">
+                        <span>{job.progressLabel || job.error || '执行中'}</span>
+                        <span className="text-text-muted">目标：{job.config.targetRelPath}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {job.proposal && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenJobInWorkbench(job)}
+                          className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-medium text-on-accent hover:bg-accent-hover"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          核验写入
+                        </button>
+                      )}
+                      {job.stage === 'paused' ? (
+                        <button
+                          type="button"
+                          onClick={() => void window.inknexus.swarm.resume(job.id)}
+                          className="rounded-lg border border-border p-1.5 text-text-secondary hover:border-accent hover:text-accent"
+                          title="继续"
+                        >
+                          <Play className="h-3.5 w-3.5" />
+                        </button>
+                      ) : job.stage !== 'awaiting_user' && job.stage !== 'failed' && job.stage !== 'cancelled' ? (
+                        <button
+                          type="button"
+                          onClick={() => void window.inknexus.swarm.pause(job.id)}
+                          className="rounded-lg border border-border p-1.5 text-text-secondary hover:border-warning hover:text-warning"
+                          title="暂停"
+                        >
+                          <Pause className="h-3.5 w-3.5" />
+                        </button>
+                      ) : null}
+
+                      {job.stage === 'failed' || job.stage === 'cancelled' ? (
+                        <button
+                          type="button"
+                          onClick={() => void window.inknexus.swarm.resume(job.id)}
+                          className="rounded-lg border border-border p-1.5 text-text-secondary hover:border-accent hover:text-accent"
+                          title="重试"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                        </button>
+                      ) : job.stage !== 'awaiting_user' ? (
+                        <button
+                          type="button"
+                          onClick={() => void window.inknexus.swarm.cancel(job.id)}
+                          className="rounded-lg border border-border p-1.5 text-text-secondary hover:border-danger hover:text-danger"
+                          title="取消"
+                        >
+                          <Square className="h-3.5 w-3.5" />
+                        </button>
+                      ) : null}
+
+                      <button
+                        type="button"
+                        onClick={() => void window.inknexus.swarm.delete(job.id)}
+                        className="rounded-lg border border-border p-1.5 text-text-secondary hover:border-danger hover:text-danger"
+                        title="删除记录"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+
+                      {job.stage === 'failed' && <XCircle className="h-4 w-4 text-danger" />}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   )
 }

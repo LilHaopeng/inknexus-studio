@@ -29,6 +29,7 @@ describe('AppDataStore', () => {
       title: '测试书',
       rootPath: projectDir,
       mode: 'long-novel',
+      category: 'long-novel',
       tags: ['长篇'],
       chapterCount: 1,
       wordCount: 4,
@@ -61,11 +62,15 @@ describe('AppDataStore', () => {
     expect(report.projects[0].snapshotCount).toBe(1)
     expect(report.projects[0].snapshotsBytes).toBeGreaterThan(0)
 
-    // Selective delete snapshots only, keep annotations
-    store.deleteProjectData(hashProjectId(projectDir), ['snapshots'])
+    // Clear temp caches only: snapshots cleared, annotations and chat sessions strictly preserved
+    store.saveChatMessages(projectDir, [
+      { id: 'c1', role: 'user', content: '保留我的对话', timestamp: Date.now() }
+    ])
+    store.clearTempCachesOnly()
     const after = store.getStorageReport()
     expect(after.projects[0].snapshotCount).toBe(0)
     expect(after.projects[0].annotationCount).toBe(1)
+    expect(store.getChatMessages(projectDir)).toHaveLength(1)
     expect(fs.existsSync(path.join(projectDir, 'ch1.md'))).toBe(true)
   })
 })

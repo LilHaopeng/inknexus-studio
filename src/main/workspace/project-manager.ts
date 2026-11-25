@@ -4,12 +4,36 @@ import chokidar, { type FSWatcher } from 'chokidar'
 import type {
   AssetNode,
   CreationMode,
+  ProjectCategory,
   ProjectSummary,
   RadarReportSummary,
   SemanticCategory,
   SubTemplateId
 } from '@shared/types'
-import { AppDataStore, hashProjectId } from '../storage/appdata-store'
+import { AppDataStore, copyDirRecursiveSync, hashProjectId } from '../storage/appdata-store'
+
+function moveDirSafeSync(src: string, dest: string): void {
+  try {
+    fs.renameSync(src, dest)
+  } catch {
+    copyDirRecursiveSync(src, dest)
+    fs.rmSync(src, { recursive: true, force: true })
+  }
+}
+
+export const CATEGORY_FOLDER_MAP: Record<Exclude<ProjectCategory, 'unclassified'>, string> = {
+  'long-novel': '长文小说',
+  'short-webnovel': '短篇网文',
+  'drama-script': 'AI剧本'
+}
+
+export function detectCategoryFromPath(workspaceRoot: string, projectRoot: string): ProjectCategory {
+  const rel = path.relative(path.resolve(workspaceRoot), path.resolve(projectRoot)).replace(/\\/g, '/')
+  if (rel.startsWith('长文小说/')) return 'long-novel'
+  if (rel.startsWith('短篇网文/')) return 'short-webnovel'
+  if (rel.startsWith('AI剧本/')) return 'drama-script'
+  return 'unclassified'
+}
 
 const IGNORED_ROOT_DIRS = new Set([
   'inknexus-studio',
@@ -72,13 +96,17 @@ export class ProjectManager {
     const inspectDir = (dirPath: string, depth: number) => {
       if (depth > 2 || !fs.existsSync(dirPath)) return
       const entries = fs.readdirSync(dirPath, { withFileTypes: true })
-      const hasProjectMarker = entries.some(
-        (e) =>
-          (e.isDirectory() && ['正文', '大纲', '设定', '剧本'].includes(e.name)) ||
-          (e.isFile() && ['00_脑洞与节拍.md', '00_季播总案与资产表.md', '00_故事DNA.md'].includes(e.name))
-      )
+      const baseName = path.basename(dirPath)
+      const isCategoryContainer = ['长文小说', '短篇网文', 'AI剧本', '未分类'].includes(baseName)
+      const hasProjectMarker =
+        !isCategoryContainer &&
+        entries.some(
+          (e) =>
+            (e.isDirectory() && ['正文', '大纲', '设定', '剧本'].includes(e.name)) ||
+            (e.isFile() && ['00_脑洞与节拍.md', '00_季播总案与资产表.md', '00_故事DNA.md'].includes(e.name))
+        )
       if (hasProjectMarker) {
-        found.push(this.buildSummary(dirPath, indexedMap.get(hashProjectId(dirPath))))
+        found.push(this.buildSummary(dirPath, indexedMap.get(hashProjectId(dirPath)), workspaceRoot))
         return
       }
       if (depth < 2) {
@@ -92,19 +120,22 @@ export class ProjectManager {
 
     inspectDir(workspaceRoot, 0)
 
-    // Merge indexed projects outside workspaceRoot
+    const resolvedWorkspace = path.resolve(workspaceRoot).toLowerCase()
     const foundIds = new Set(found.map((f) => f.id))
     for (const prev of indexedMap.values()) {
-      if (!foundIds.has(prev.id) && fs.existsSync(prev.rootPath)) {
-        found.push(this.buildSummary(prev.rootPath, prev))
+      const prevNorm = path.resolve(prev.rootPath).toLowerCase()
+      if (!foundIds.has(prev.id) && prevNorm.startsWith(resolvedWorkspace + path.sep) && fs.existsSync(prev.rootPath)) {
+        found.push(this.buildSummary(prev.rootPath, prev, workspaceRoot))
       }
     }
 
     return found.sort((a, b) => b.lastModified - a.lastModified)
   }
 
-  buildSummary(projectRoot: string, prev?: ProjectSummary): ProjectSummary {
+  buildSummary(projectRoot: string, prev?: ProjectSummary, workspaceRoot?: string): ProjectSummary {
     const mode = detectProjectMode(projectRoot)
+    const effectiveRoot = workspaceRoot || this.store.getConfig().workspaceRoot
+    const category = detectCategoryFromPath(effectiveRoot, projectRoot)
     let chapterCount = 0
     let wordCount = 0
     let latestMtime = 0
@@ -139,6 +170,7 @@ export class ProjectManager {
       title: prev?.title ?? path.basename(projectRoot),
       rootPath: path.resolve(projectRoot),
       mode,
+      category,
       tags:
         prev?.tags ??
         (mode === 'short-webnovel' ? ['短篇网文'] : mode === 'drama-script' ? ['AI 剧本'] : ['长文小说']),
@@ -211,7 +243,13 @@ export class ProjectManager {
     subTemplate?: SubTemplateId
   }): { summary: ProjectSummary; entryRelPath: string } {
     const safeTitle = params.title.trim().replace(/[\\/:*?"<>|]/g, '_') || '未命名作品'
-    const projectRoot = path.join(params.parentDir, safeTitle)
+    const catFolder = CATEGORY_FOLDER_MAP[params.mode]
+    const useCategoryDir =
+      fs.existsSync(path.join(params.parentDir, catFolder)) ||
+      fs.existsSync(path.join(params.parentDir, '未分类')) ||
+      path.basename(params.parentDir).toLowerCase() === 'inknexus'
+    const baseDir = useCategoryDir ? path.join(params.parentDir, catFolder) : params.parentDir
+    const projectRoot = path.join(baseDir, safeTitle)
     fs.mkdirSync(projectRoot, { recursive: true })
 
     let entryRelPath = '大纲/00_故事DNA.md'
@@ -282,6 +320,49 @@ export class ProjectManager {
     summary.lastOpenedFile = entryRelPath
     this.store.upsertIndexedProject(summary)
     return { summary, entryRelPath }
+  }
+
+  classifyAndMoveProject(
+    workspaceRoot: string,
+    projectRoot: string,
+    targetCategory: Exclude<ProjectCategory, 'unclassified'>
+  ): ProjectSummary {
+    const resolvedWs = path.resolve(workspaceRoot)
+    const resolvedSrc = path.resolve(projectRoot)
+    if (!resolvedSrc.toLowerCase().startsWith(resolvedWs.toLowerCase() + path.sep)) {
+      throw new Error('仅支持分类迁移工作区目录内的作品。')
+    }
+    const catFolder = CATEGORY_FOLDER_MAP[targetCategory]
+    const destParent = path.join(resolvedWs, catFolder)
+    fs.mkdirSync(destParent, { recursive: true })
+
+    const baseName = path.basename(resolvedSrc)
+    let destRoot = path.join(destParent, baseName)
+    let idx = 2
+    while (fs.existsSync(destRoot) && destRoot.toLowerCase() !== resolvedSrc.toLowerCase()) {
+      destRoot = path.join(destParent, `${baseName}_${idx++}`)
+    }
+    if (destRoot.toLowerCase() !== resolvedSrc.toLowerCase()) {
+      moveDirSafeSync(resolvedSrc, destRoot)
+      this.store.migrateProjectDir(resolvedSrc, destRoot)
+    }
+    return this.buildSummary(destRoot, undefined, resolvedWs)
+  }
+
+  deleteProjectFolder(workspaceRoot: string, projectRoot: string): void {
+    const resolvedWs = path.resolve(workspaceRoot)
+    const resolvedTarget = path.resolve(projectRoot)
+    if (
+      resolvedTarget.toLowerCase() === resolvedWs.toLowerCase() ||
+      !resolvedTarget.toLowerCase().startsWith(resolvedWs.toLowerCase() + path.sep)
+    ) {
+      throw new Error('安全保护：不允许删除工作区根目录或外部目录。')
+    }
+    this.stopWatching()
+    if (fs.existsSync(resolvedTarget)) {
+      fs.rmSync(resolvedTarget, { recursive: true, force: true })
+    }
+    this.store.deleteProjectData(hashProjectId(resolvedTarget), ['all'])
   }
 
   readFile(projectRoot: string, relPath: string): { content: string; mtimeMs: number } {

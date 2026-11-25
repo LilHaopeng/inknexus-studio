@@ -308,26 +308,21 @@ export const InstallerApp: React.FC = () => {
                         >
                           《用户使用声明》
                         </button>
-                        <span className="block text-[11px] text-[#7A7694]">
-                          包含 MIT 开源许可（{author}）、创作内容与版权免责、以及纯本地零隐私收集承诺（必选）
-                        </span>
                       </span>
                     </label>
                   </div>
                 </div>
 
                 <div className="pt-1 text-[11px] text-[#7A7694]">
-                  开源作者：
+                  作者：
                   <button
                     type="button"
-                    onClick={() => void window.inknexusInstaller.openExternal(repoUrl)}
+                    onClick={() => void window.inknexusInstaller.openExternal('https://github.com/LilHaopeng')}
                     className="inline-flex items-center gap-0.5 font-medium text-[#684BD2] hover:underline"
                   >
                     GitHub {author}
                     <ExternalLink className="h-2.5 w-2.5" />
                   </button>
-                  <span className="mx-1.5">·</span>
-                  <span>本地与自带 Agent 直连处理，无任何云端遥测</span>
                 </div>
               </div>
             </div>
@@ -338,9 +333,6 @@ export const InstallerApp: React.FC = () => {
               <div className="space-y-4">
                 <div>
                   <h2 className="text-xl font-bold text-[#1A1A28]">选择安装位置</h2>
-                  <p className="mt-1 text-xs text-[#6B6785]">
-                    即将安装 墨枢 InkNexus Studio {version}（安装不会改动您已有小说文件夹或 AppData 创作数据）
-                  </p>
                 </div>
 
                 <div className="rounded-2xl border border-[#DED5F7] bg-white/80 p-4 shadow-xs backdrop-blur-md space-y-3">
@@ -392,7 +384,7 @@ export const InstallerApp: React.FC = () => {
                       onChange={(e) => setCreateStartMenuShortcut(e.target.checked)}
                       className="h-4 w-4 accent-[#684BD2]"
                     />
-                    <span>添加到开始菜单快捷方式（含一键卸载入口）</span>
+                    <span>添加到开始菜单快捷方式</span>
                   </label>
                   <label className="flex cursor-pointer items-center gap-2.5">
                     <input
@@ -401,7 +393,7 @@ export const InstallerApp: React.FC = () => {
                       onChange={(e) => setLaunchOnStartup(e.target.checked)}
                       className="h-4 w-4 accent-[#684BD2]"
                     />
-                    <span>开机时启动 墨枢（可在 Windows 设置中关闭）</span>
+                    <span>开机时启动 墨枢</span>
                   </label>
                 </div>
               </div>

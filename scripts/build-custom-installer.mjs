@@ -6,9 +6,10 @@ import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
+const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
 const NSI_PATH = path.join(ROOT, 'build', 'custom-installer.nsi')
 const UNPACKED_EXE = path.join(ROOT, 'dist', 'win-unpacked', '墨枢 InkNexus Studio.exe')
-const OUT_EXE = path.join(ROOT, 'dist', '墨枢 InkNexus Studio Setup 1.0.0.exe')
+const OUT_EXE = path.join(ROOT, 'dist', `墨枢 InkNexus Studio Setup ${PKG.version}.exe`)
 
 function findMakensis() {
   const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')

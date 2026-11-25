@@ -1,4 +1,5 @@
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import crypto from 'crypto'
 import type {
@@ -30,7 +31,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   theme: 'aurora-light',
   editorReadTheme: 'default',
   effectsMode: 'full',
-  workspaceRoot: 'c:\\Dbackup\\AI小说',
+  workspaceRoot: 'c:\\Dbackup\\AI小说\\InkNexus',
   permissionMode: 'diff-review',
   defaultAgentId: 'agy-cli',
   defaultModel: 'gemini-4-neon-high',
@@ -90,6 +91,19 @@ function fileSizeBytes(filePath: string): number {
   }
 }
 
+export function copyDirRecursiveSync(src: string, dest: string): void {
+  fs.mkdirSync(dest, { recursive: true })
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name)
+    const destPath = path.join(dest, entry.name)
+    if (entry.isDirectory()) {
+      copyDirRecursiveSync(srcPath, destPath)
+    } else if (entry.isFile()) {
+      fs.copyFileSync(srcPath, destPath)
+    }
+  }
+}
+
 export class AppDataStore {
   public readonly rootDir: string
   private readonly vault: SecretVault
@@ -129,7 +143,16 @@ export class AppDataStore {
 
   getConfig(): AppConfig {
     const saved = safeReadJson<Partial<AppConfig>>(this.configPath, {})
-    return { ...DEFAULT_CONFIG, ...saved }
+    const merged = { ...DEFAULT_CONFIG, ...saved }
+    if (
+      saved.workspaceRoot &&
+      path.resolve(saved.workspaceRoot).toLowerCase() === path.resolve('c:\\Dbackup\\AI小说').toLowerCase() &&
+      fs.existsSync('c:\\Dbackup\\AI小说\\InkNexus')
+    ) {
+      merged.workspaceRoot = 'c:\\Dbackup\\AI小说\\InkNexus'
+      atomicWriteJson(this.configPath, merged)
+    }
+    return merged
   }
 
   saveConfig(partial: Partial<AppConfig>): AppConfig {
@@ -206,6 +229,23 @@ export class AppDataStore {
   removeIndexedProject(projectId: string): void {
     const list = this.listIndexedProjects().filter((p) => p.id !== projectId)
     atomicWriteJson(this.projectsIndexPath, list)
+  }
+
+  migrateProjectDir(oldRoot: string, newRoot: string): void {
+    const oldId = hashProjectId(oldRoot)
+    const newId = hashProjectId(newRoot)
+    if (oldId === newId) return
+    const oldDir = this.projectDirById(oldId)
+    const newDir = this.projectDirById(newId)
+    if (fs.existsSync(oldDir) && !fs.existsSync(newDir)) {
+      fs.mkdirSync(path.dirname(newDir), { recursive: true })
+      copyDirRecursiveSync(oldDir, newDir)
+      fs.rmSync(oldDir, { recursive: true, force: true })
+    }
+    const next = this.listIndexedProjects().map((p) =>
+      p.id === oldId ? { ...p, id: newId, rootPath: path.resolve(newRoot) } : p
+    )
+    atomicWriteJson(this.projectsIndexPath, next)
   }
 
   // --- Annotations ---
@@ -450,12 +490,36 @@ export class AppDataStore {
     }
 
     const swarmBytes = dirSizeBytes(path.join(this.rootDir, 'swarm'))
+    const tempUpdateBytes = dirSizeBytes(path.join(os.tmpdir(), 'InkNexusStudio-Updates'))
+    const tempAppBytes = dirSizeBytes(path.join(this.rootDir, 'temp-cache'))
+    const snapshotsTotalBytes = breakdown.reduce((acc, p) => acc + p.snapshotsBytes, 0)
+    const tempCacheBytes = tempUpdateBytes + tempAppBytes + snapshotsTotalBytes
     const totalBytes = dirSizeBytes(this.rootDir)
     return {
       rootDir: this.rootDir,
       totalBytes,
+      tempCacheBytes,
       swarmBytes,
       projects: breakdown.sort((a, b) => b.totalBytes - a.totalBytes)
+    }
+  }
+
+  clearTempCachesOnly(): void {
+    const tmpUpdater = path.join(os.tmpdir(), 'InkNexusStudio-Updates')
+    if (fs.existsSync(tmpUpdater)) fs.rmSync(tmpUpdater, { recursive: true, force: true })
+
+    const tempAppDir = path.join(this.rootDir, 'temp-cache')
+    if (fs.existsSync(tempAppDir)) fs.rmSync(tempAppDir, { recursive: true, force: true })
+
+    const projectsDir = path.join(this.rootDir, 'projects')
+    if (fs.existsSync(projectsDir)) {
+      for (const entry of fs.readdirSync(projectsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue
+        const snapDir = path.join(projectsDir, entry.name, 'snapshots')
+        if (fs.existsSync(snapDir)) {
+          fs.rmSync(snapDir, { recursive: true, force: true })
+        }
+      }
     }
   }
 
@@ -467,17 +531,8 @@ export class AppDataStore {
       this.removeIndexedProject(projectId)
       return
     }
-    if (scopes.includes('annotations')) {
-      fs.rmSync(path.join(pDir, 'annotations.json'), { force: true })
-    }
     if (scopes.includes('snapshots')) {
       fs.rmSync(path.join(pDir, 'snapshots'), { recursive: true, force: true })
-    }
-    if (scopes.includes('chat')) {
-      fs.rmSync(path.join(pDir, 'chat-sessions.json'), { force: true })
-    }
-    if (scopes.includes('reviews')) {
-      fs.rmSync(path.join(pDir, 'reviews.json'), { force: true })
     }
   }
 }

@@ -222,8 +222,45 @@
   background: rgba(163, 138, 250, 0.24);
 }
 
+@keyframes auroraCardShimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.active-work-card {
+  position: relative;
+  border-color: rgba(116, 83, 220, 0.52);
+  background-image: linear-gradient(
+    120deg,
+    rgba(116, 83, 220, 0.08) 0%,
+    rgba(56, 132, 232, 0.14) 50%,
+    rgba(163, 138, 250, 0.08) 100%
+  );
+  background-size: 200% 200%;
+  animation: auroraCardShimmer 4.5s ease-in-out infinite;
+  box-shadow: 0 8px 24px rgba(116, 83, 220, 0.14);
+}
+
+[data-theme="aurora-dark"] .active-work-card {
+  border-color: rgba(163, 138, 250, 0.58);
+  background-image: linear-gradient(
+    120deg,
+    rgba(163, 138, 250, 0.14) 0%,
+    rgba(72, 132, 240, 0.2) 50%,
+    rgba(163, 138, 250, 0.14) 100%
+  );
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .decorative-motion {
+  .decorative-motion,
+  .active-work-card {
     animation: none !important;
     transition: none !important;
   }

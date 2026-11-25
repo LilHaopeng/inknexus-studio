@@ -26,7 +26,7 @@ export const ReasoningSlider: React.FC<ReasoningSliderProps> = ({
     return (
       <div
         title={scaleTooltip}
-        className="flex h-8 items-center justify-between gap-2 rounded-lg border border-border bg-surface-raised px-2.5 text-xs"
+        className="flex h-8 min-w-0 items-center justify-between gap-2 overflow-hidden rounded-lg border border-border bg-surface-raised px-2.5 text-xs"
       >
         <span className="inline-flex items-center gap-1 text-text-secondary">
           <Brain className="h-3.5 w-3.5 text-accent" />
@@ -42,7 +42,7 @@ export const ReasoningSlider: React.FC<ReasoningSliderProps> = ({
   return (
     <div
       title={scaleTooltip}
-      className={`flex items-center gap-2 rounded-lg border border-border bg-surface-raised px-3 ${
+      className={`flex min-w-0 items-center gap-2 overflow-hidden rounded-lg border border-border bg-surface-raised px-2.5 ${
         compact ? 'h-8' : 'h-9'
       }`}
     >
@@ -51,45 +51,43 @@ export const ReasoningSlider: React.FC<ReasoningSliderProps> = ({
         <span className="font-semibold text-accent">{REASONING_LABELS[clamped]}</span>
       </div>
 
-      <div className="relative mx-1 flex min-w-[68px] flex-1 items-center py-1">
-        {/* Background track */}
-        <div className="h-1.5 w-full rounded-full bg-border" />
-        {/* Filled gradient track */}
-        <div
-          className="pointer-events-none absolute left-0 h-1.5 rounded-full bg-gradient-to-r from-[#7855DA] to-[#4A74F5] transition-all duration-150"
-          style={{ width: `${percent}%` }}
-        />
-        {/* Stop dots */}
-        <div className="pointer-events-none absolute inset-x-0 flex items-center justify-between px-[3px]">
-          {levels.map((lvl, idx) => (
-            <span
-              key={lvl}
-              className={`h-1.5 w-1.5 rounded-full transition ${
-                idx <= activeIdx ? 'bg-white/90 shadow-2xs' : 'bg-text-muted/40'
-              }`}
-            />
-          ))}
+      {/* Inner padded track wrapper guarantees thumb never clips or overflows border */}
+      <div className="relative flex min-w-[78px] flex-1 items-center px-2 py-1">
+        <div className="relative flex h-3.5 w-full items-center">
+          <div className="h-1.5 w-full rounded-full bg-border" />
+          <div
+            className="pointer-events-none absolute left-0 h-1.5 rounded-full bg-gradient-to-r from-[#7855DA] to-[#4A74F5] transition-all duration-150"
+            style={{ width: `${percent}%` }}
+          />
+          <div className="pointer-events-none absolute inset-x-0 flex items-center justify-between">
+            {levels.map((lvl, idx) => (
+              <span
+                key={lvl}
+                className={`h-1.5 w-1.5 rounded-full transition ${
+                  idx <= activeIdx ? 'bg-white/90 shadow-2xs' : 'bg-text-muted/40'
+                }`}
+              />
+            ))}
+          </div>
+          <div
+            className="pointer-events-none absolute h-3.5 w-3.5 -translate-x-1/2 rounded-full border-2 border-white bg-[#7855DA] shadow-md ring-2 ring-[#7855DA]/25 transition-all duration-150"
+            style={{ left: `${percent}%` }}
+          />
+          <input
+            type="range"
+            aria-label="思考强度"
+            min={0}
+            max={levels.length - 1}
+            step={1}
+            value={activeIdx}
+            onChange={(e) => {
+              const nextIdx = Number(e.target.value)
+              const nextLevel = levels[nextIdx]
+              if (nextLevel) onChange(nextLevel)
+            }}
+            className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+          />
         </div>
-        {/* Visible thumb */}
-        <div
-          className="pointer-events-none absolute h-3.5 w-3.5 -translate-x-1/2 rounded-full border-2 border-white bg-[#7855DA] shadow-md ring-2 ring-[#7855DA]/25 transition-all duration-150"
-          style={{ left: `${percent}%` }}
-        />
-        {/* Interactive native range input overlaid transparently for accessible drag & keyboard step */}
-        <input
-          type="range"
-          aria-label="思考强度"
-          min={0}
-          max={levels.length - 1}
-          step={1}
-          value={activeIdx}
-          onChange={(e) => {
-            const nextIdx = Number(e.target.value)
-            const nextLevel = levels[nextIdx]
-            if (nextLevel) onChange(nextLevel)
-          }}
-          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-        />
       </div>
     </div>
   )

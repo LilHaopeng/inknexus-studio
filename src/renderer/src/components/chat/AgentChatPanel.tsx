@@ -1,12 +1,14 @@
 import React, { useState } from 'react'
 import {
   AlertCircle,
+  AlertTriangle,
   BookCheck,
+  BookOpen,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Clock,
   GitCompare,
+  Maximize2,
   MessageSquare,
   Play,
   RefreshCw,
@@ -19,30 +21,44 @@ import {
   Workflow
 } from 'lucide-react'
 import { toast } from 'sonner'
-import type { AnnotationThread, PermissionMode, ReviewHistoryEntry, ReviewMode } from '@shared/types'
+import type { AnnotationThread, ChatMessage, PermissionMode, ReviewHistoryEntry, ReviewMode } from '@shared/types'
 import { stripAgentMarkupForDisplay } from '@shared/agent-markup-filter'
 import { useStudioStore } from '../../store/useStudioStore'
 import { AgentSelectorBar } from '../ui/AgentSelectorBar'
-import { ReviewModeSelector } from '../ui/ReviewModeSelector'
 import { FullBookReviewModal } from '../ui/FullBookReviewModal'
+import { ExpandedComposerModal } from '../ui/ExpandedComposerModal'
+import { CreateChaptersModal } from '../ui/CreateChaptersModal'
 
 interface AgentChatPanelProps {
   draftPrompt: string
   setDraftPrompt: (v: string) => void
-  onSendPrompt: (customText?: string, runReviewPipeline?: boolean) => Promise<void>
+  onSendPrompt: (customText?: string, runReviewPipeline?: boolean, overrideReviewMode?: ReviewMode) => Promise<void>
+  onExecutePlanMessage: (msg: ChatMessage) => Promise<void>
+  onConfirmReviewModeAsk: (msg: ChatMessage, chosenMode: ReviewMode) => Promise<void>
+  onCreateChaptersFromOutline: (params: {
+    outlineRelPath: string
+    scope: 'count' | 'full'
+    chapterCount: number
+    extraNote: string
+  }) => Promise<void>
   onAbort: () => void
   onApplyTextAsDiff: (text: string, summary: string) => void
   onDispatchAnnotation: (ann: AnnotationThread) => Promise<void>
-  onDispatchAllAnnotations: () => Promise<void>
+  onDispatchAllAnnotations: (reviewAfter: boolean) => Promise<void>
   onRunLint: () => Promise<void>
   onRunChapterReview: () => Promise<void>
   onRunFullBookReview: (chosenMode: ReviewMode) => Promise<void>
 }
 
+const OUTLINE_PATH_RE = /(^|\/)(大纲\/|00_故事DNA|01_故事架构|00_脑洞与节拍|01_分集卡点|.*细纲|.*总案)/i
+
 export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
   draftPrompt,
   setDraftPrompt,
   onSendPrompt,
+  onExecutePlanMessage,
+  onConfirmReviewModeAsk,
+  onCreateChaptersFromOutline,
   onAbort,
   onApplyTextAsDiff,
   onDispatchAnnotation,
@@ -63,6 +79,7 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
     streamingThinking,
     statusText,
     agentSelection,
+    setRoleAgentOverride,
     setAgentSelection,
     reviewMode,
     setReviewMode,
@@ -73,16 +90,21 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
   } = useStudioStore()
 
   const [rightTab, setRightTab] = useState<'chat' | 'annotations' | 'lint'>('chat')
-  const [taskExpanded, setTaskExpanded] = useState(true)
+  const [taskExpanded, setTaskExpanded] = useState(false)
   const [showThinking, setShowThinking] = useState(false)
   const [replyTargetId, setReplyTargetId] = useState<string | null>(null)
   const [replyText, setReplyText] = useState('')
   const [reviewBusy, setReviewBusy] = useState(false)
   const [fullBookModalOpen, setFullBookModalOpen] = useState(false)
+  const [expandModalOpen, setExpandModalOpen] = useState(false)
+  const [createChaptersOpen, setCreateChaptersOpen] = useState(false)
+  const [reviewAfterAnnotation, setReviewAfterAnnotation] = useState(true)
+  const [inlineAskMode, setInlineAskMode] = useState<ReviewMode>(reviewMode)
 
   const totalTokens = contextSlices.filter((s) => s.enabled).reduce((acc, s) => acc + s.tokens, 0)
   const fileAnnotations = annotations.filter((a) => !activeTabRelPath || a.filePath === activeTabRelPath)
   const unresolvedCount = fileAnnotations.filter((a) => !a.resolved).length
+  const isOutlineDoc = Boolean(activeTabRelPath && OUTLINE_PATH_RE.test(activeTabRelPath))
 
   const togglePermission = async () => {
     const next: PermissionMode = config?.permissionMode === 'auto-write' ? 'diff-review' : 'auto-write'
@@ -127,7 +149,7 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
 
   const triggerFullBookReview = async (chosenMode: ReviewMode) => {
     setFullBookModalOpen(false)
-    setReviewMode(chosenMode)
+    setReviewMode(chosenMode, true)
     setReviewBusy(true)
     try {
       await onRunFullBookReview(chosenMode)
@@ -139,7 +161,7 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
 
   const handleApplyReviewToFix = (entry: ReviewHistoryEntry) => {
     const issueLines = entry.issues.map((i, idx) => `${idx + 1}. ${i.message}`).join('\n')
-    const fixPrompt = `请对照以下审校报告，对当前章节进行针对性修订（保持原有声口，不破坏已锁定设定）：\n\n【总评】${entry.summary}\n${
+    const fixPrompt = `请对照以下审查报告，对当前章节进行针对性修订（保持原有声口，不破坏已锁定设定）：\n\n【总评】${entry.summary}\n${
       issueLines ? `【待修条目】\n${issueLines}` : ''
     }`
     setRightTab('chat')
@@ -155,7 +177,7 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
             <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-accent-soft text-accent">
               <Sparkles className="h-3.5 w-3.5" />
             </span>
-            <span className="text-sm font-semibold text-text-primary">AI 共创</span>
+            <span className="text-sm font-semibold text-text-primary">主控对话</span>
           </div>
           <span
             className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
@@ -164,7 +186,7 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
                 : 'border border-border bg-surface-raised text-text-secondary'
             }`}
           >
-            <span className={`h-1.5 w-1.5 rounded-full ${isGenerating || reviewBusy ? 'bg-accent animate-pulse' : 'bg-success'}`} />
+            <span className={`h-1.5 w-1.5 rounded-full ${isGenerating || reviewBusy ? 'animate-pulse bg-accent' : 'bg-success'}`} />
             {reviewBusy ? '审查执行中' : isGenerating ? statusText || '执行中' : '待命中'}
           </span>
         </div>
@@ -186,7 +208,10 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
               rightTab === 'annotations' ? 'bg-accent-soft text-accent' : 'text-text-secondary hover:text-text-primary'
             }`}
           >
-            批注 {unresolvedCount > 0 && <span className="ml-0.5 rounded-full bg-accent px-1.5 text-[10px] text-on-accent">{unresolvedCount}</span>}
+            批注{' '}
+            {unresolvedCount > 0 && (
+              <span className="ml-0.5 rounded-full bg-accent px-1.5 text-[10px] text-on-accent">{unresolvedCount}</span>
+            )}
           </button>
           <button
             type="button"
@@ -195,82 +220,49 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
               rightTab === 'lint' ? 'bg-accent-soft text-accent' : 'text-text-secondary hover:text-text-primary'
             }`}
           >
-            审校 {reviewHistory.length > 0 && <span className="ml-0.5 text-[10px] opacity-75">({reviewHistory.length})</span>}
+            审查 {reviewHistory.length > 0 && <span className="ml-0.5 text-[10px] opacity-75">({reviewHistory.length})</span>}
           </button>
         </div>
       </div>
 
       {rightTab === 'chat' && (
         <>
-          <div className="space-y-2 border-b border-border px-3.5 py-2.5 text-xs">
-            <div className="rounded-xl border border-border bg-surface-raised p-2.5">
-              <button
-                type="button"
-                onClick={() => setTaskExpanded((v) => !v)}
-                className="flex w-full items-center justify-between font-medium text-text-primary"
-              >
-                <span className="truncate">{preComposedPrompt?.taskTitle ?? '自由协同写作'}</span>
+          {/* Compact collapsible context slices bar */}
+          <div className="border-b border-border px-3.5 py-2 text-xs">
+            <button
+              type="button"
+              onClick={() => setTaskExpanded((v) => !v)}
+              className="flex w-full items-center justify-between font-medium text-text-primary"
+            >
+              <span className="truncate">{preComposedPrompt?.taskTitle ?? '当前装载参考切片'}</span>
+              <span className="flex items-center gap-1.5 text-[10px] text-text-muted">
+                <span>~{totalTokens.toLocaleString()} tokens</span>
                 {taskExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-              </button>
-              {taskExpanded && (
-                <div className="mt-1.5 space-y-1.5">
-                  <div className="text-[11px] text-text-secondary">
-                    {preComposedPrompt?.summaryLabel ?? '已按当前作品模式装载对应 Skill 规范'}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1">
-                    {contextSlices.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        title={`${c.reason}（约 ${c.tokens} tokens）`}
-                        onClick={() => toggleContextSlice(c.id)}
-                        className={`rounded-md border px-1.5 py-0.5 text-[10px] transition ${
-                          c.enabled
-                            ? 'border-accent/40 bg-accent-soft/70 text-accent'
-                            : 'border-border bg-surface text-text-muted line-through'
-                        }`}
-                      >
-                        {c.label}
-                      </button>
-                    ))}
-                    <span className="ml-auto text-[10px] text-text-muted">~{totalTokens.toLocaleString()} tokens</span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <ReviewModeSelector value={reviewMode} onChange={setReviewMode} compact />
-
-            {/* 审查按钮下方直接提供「审查本章」快捷入口 */}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={reviewBusy || !activeTabRelPath}
-                onClick={() => void triggerChapterReview()}
-                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-accent/45 bg-accent-soft/70 px-3 py-1.5 text-xs font-semibold text-accent transition hover:bg-accent hover:text-on-accent disabled:opacity-45"
-              >
-                <BookCheck className="h-3.5 w-3.5" />
-                {reviewBusy ? '正在审查本章...' : '审查本章'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setRightTab('lint')}
-                className="inline-flex items-center gap-1 rounded-xl border border-border bg-surface-raised px-2.5 py-1.5 text-[11px] text-text-secondary hover:border-accent/40 hover:text-text-primary"
-              >
-                <Clock className="h-3 w-3" />
-                审校记录 ({reviewHistory.length})
-              </button>
-            </div>
-          </div>
-
-          {/* Messages Feed */}
-          <div className="flex-1 space-y-3 overflow-y-auto px-3.5 py-3">
-            {chatMessages.length === 0 && !isGenerating && (
-              <div className="rounded-xl border border-dashed border-border p-4 text-center text-xs text-text-muted">
-                下方输入框已预埋对应场景的起手指令，你可以直接点击发送，或补充你的要求后发送。
+              </span>
+            </button>
+            {taskExpanded && (
+              <div className="mt-2 flex flex-wrap items-center gap-1">
+                {contextSlices.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    title={`${c.reason}（约 ${c.tokens} tokens）`}
+                    onClick={() => toggleContextSlice(c.id)}
+                    className={`rounded-md border px-1.5 py-0.5 text-[10px] transition ${
+                      c.enabled
+                        ? 'border-accent/40 bg-accent-soft/70 text-accent'
+                        : 'border-border bg-surface text-text-muted line-through'
+                    }`}
+                  >
+                    {c.label}
+                  </button>
+                ))}
               </div>
             )}
+          </div>
 
+          {/* Upper Coordinator Feedback / Questions / Conversation Feed */}
+          <div className="flex-1 space-y-3 overflow-y-auto px-3.5 py-3">
             {chatMessages.map((msg) => (
               <div
                 key={msg.id}
@@ -289,7 +281,58 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
                 <div className="whitespace-pre-wrap">
                   {msg.role === 'assistant' ? stripAgentMarkupForDisplay(msg.content) : msg.content}
                 </div>
-                {msg.role === 'assistant' && msg.content.length > 40 && (
+
+                {msg.kind === 'plan-proposal' && !msg.actionExecuted && (
+                  <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-border/60 pt-2">
+                    <span className="text-[11px] text-text-muted">确认思路后由主控派发执行</span>
+                    <button
+                      type="button"
+                      disabled={isGenerating}
+                      onClick={() => void onExecutePlanMessage(msg)}
+                      className="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-[#7855DA] to-[#684BD2] px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm hover:opacity-95 disabled:opacity-45"
+                    >
+                      <Play className="h-3 w-3" />
+                      按需执行
+                    </button>
+                  </div>
+                )}
+
+                {msg.kind === 'review-mode-ask' && !msg.actionExecuted && (
+                  <div className="mt-2.5 space-y-2 border-t border-border/60 pt-2">
+                    <div className="grid grid-cols-3 gap-1">
+                      {(['self', 'single', 'advanced'] as ReviewMode[]).map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => setInlineAskMode(m)}
+                          className={`rounded-lg border px-2 py-1 text-[11px] font-medium transition ${
+                            inlineAskMode === m
+                              ? 'border-accent bg-accent text-on-accent'
+                              : 'border-border bg-surface text-text-primary hover:border-accent/40'
+                          }`}
+                        >
+                          {m === 'self' ? '自审' : m === 'single' ? '单独审查' : '高级审查'}
+                        </button>
+                      ))}
+                    </div>
+                    {inlineAskMode === 'advanced' && (
+                      <div className="flex items-center gap-1.5 rounded-lg border border-amber-400/50 bg-amber-500/12 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-300">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                        <span>高级审查：该模式下会消耗大量token额度</span>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      disabled={isGenerating}
+                      onClick={() => void onConfirmReviewModeAsk(msg, inlineAskMode)}
+                      className="w-full rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-on-accent hover:bg-accent-hover disabled:opacity-45"
+                    >
+                      确认采用此方式并开始
+                    </button>
+                  </div>
+                )}
+
+                {msg.role === 'assistant' && msg.content.length > 40 && msg.kind !== 'review-mode-ask' && (
                   <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-border/60 pt-2">
                     <button
                       type="button"
@@ -323,7 +366,7 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
                   </div>
                 )}
                 <div className="whitespace-pre-wrap text-text-primary">
-                  {streamingText || '正在调用 Agent 生成中...'}
+                  {streamingText || '正在调用主控 Agent 调度中...'}
                 </div>
               </div>
             )}
@@ -344,16 +387,7 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
                 onClick={() => void onRunLint()}
                 className="rounded-lg border border-border bg-surface px-2 py-1 text-[11px] text-text-secondary hover:border-accent/50 hover:text-accent"
               >
-                跑体检镜子
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  void onSendPrompt('请从当前正文提取新增剧情事实、人物状态变化与未收伏笔，给出角色状态与章节交接台账更新建议。')
-                }
-                className="rounded-lg border border-border bg-surface px-2 py-1 text-[11px] text-text-secondary hover:border-accent/50 hover:text-accent"
-              >
-                提取状态台账
+                快速体检
               </button>
               <button
                 type="button"
@@ -370,18 +404,37 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
                     reviewer1: reviewMode !== 'self' ? agentSelection : undefined,
                     reviewer2: reviewMode === 'advanced' ? agentSelection : undefined
                   })
-                  toast.success(`已将《${activeProject.title}》派发至并发队列（${reviewMode}）`)
+                  toast.success(`已将《${activeProject.title}》派发至工作区`)
                 }}
                 className="inline-flex items-center gap-1 rounded-lg border border-accent/40 bg-accent-soft/60 px-2 py-1 text-[11px] font-medium text-accent hover:bg-accent hover:text-on-accent"
               >
                 <Workflow className="h-3 w-3" />
-                派发至并发队列
+                派发至工作区
               </button>
             </div>
 
-            <AgentSelectorBar value={agentSelection} onChange={setAgentSelection} compact />
+            <AgentSelectorBar
+              value={agentSelection}
+              compact
+              onlyReady
+              onChange={(nextSel) => {
+                setAgentSelection(nextSel)
+                if (activeProject) {
+                  setRoleAgentOverride(activeProject.rootPath, 'coordinator', nextSel)
+                }
+              }}
+            />
 
-            <div className="rounded-xl border border-border bg-surface p-2 focus-within:border-accent">
+            <div className="relative rounded-xl border border-border bg-surface p-2 focus-within:border-accent">
+              <button
+                type="button"
+                title="放大输入框至屏幕中央"
+                onClick={() => setExpandModalOpen(true)}
+                className="absolute top-1.5 right-1.5 z-10 rounded-lg border border-border/70 bg-surface-raised/65 p-1 text-text-secondary opacity-70 backdrop-blur-xs transition hover:opacity-100 hover:border-accent/50 hover:text-accent"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+              </button>
+
               <textarea
                 rows={3}
                 value={draftPrompt}
@@ -392,8 +445,8 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
                     void onSendPrompt()
                   }
                 }}
-                placeholder="输入你的创作要求（Ctrl+Enter 发送）..."
-                className="w-full resize-none bg-transparent text-xs leading-relaxed text-text-primary outline-none"
+                placeholder="向主控发送指令（Ctrl+Enter 发送）..."
+                className="w-full resize-none bg-transparent pr-7 text-xs leading-relaxed text-text-primary outline-none"
               />
               <div className="mt-1.5 flex items-center justify-between gap-2">
                 <button
@@ -421,7 +474,6 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
                       type="button"
                       disabled={!draftPrompt.trim()}
                       onClick={() => void onSendPrompt(undefined, true)}
-                      title="由写作 Agent 生成后，自动按上方所选审查机制流水线复核"
                       className="inline-flex items-center gap-1 rounded-lg border border-accent/50 bg-accent-soft px-2.5 py-1 text-xs font-medium text-accent hover:bg-accent hover:text-on-accent disabled:opacity-45"
                     >
                       <ShieldCheck className="h-3 w-3" />
@@ -450,22 +502,12 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
             <span className="text-xs font-semibold text-text-secondary">
               当前文档批注（{fileAnnotations.length}）
             </span>
-            {unresolvedCount > 0 && (
-              <button
-                type="button"
-                onClick={() => void onDispatchAllAnnotations()}
-                className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1 text-[11px] font-medium text-on-accent hover:bg-accent-hover"
-              >
-                <Wand2 className="h-3 w-3" />
-                汇总 {unresolvedCount} 条交 AI 修订
-              </button>
-            )}
           </div>
 
           <div className="flex-1 space-y-2.5 overflow-y-auto">
             {fileAnnotations.length === 0 ? (
               <div className="rounded-xl border border-dashed border-border p-6 text-center text-xs text-text-muted">
-                在中间编辑器选中任意段落，点击「批注」即可像 Word 一样添加批注，并直接派发给 AI 修改。
+                在中间编辑器选中任意段落，点击「批注」即可添加修改批注。
               </div>
             ) : (
               fileAnnotations.map((ann) => (
@@ -557,14 +599,83 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
               ))
             )}
           </div>
+
+          {/* Sticky Bottom Actions: Batch Annotation Fix + Outline-to-Prose Trigger */}
+          <div className="mt-3 space-y-2.5 border-t border-border pt-3 text-xs">
+            {fileAnnotations.length > 0 && (
+              <div className="space-y-1.5 rounded-xl border border-border bg-surface-raised p-2.5">
+                <button
+                  type="button"
+                  disabled={isGenerating || unresolvedCount === 0}
+                  onClick={() => void onDispatchAllAnnotations(reviewAfterAnnotation)}
+                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-[#7855DA] to-[#684BD2] px-3 py-2 text-xs font-semibold text-white shadow-sm disabled:opacity-45"
+                >
+                  <Wand2 className="h-3.5 w-3.5" />
+                  按批注进行修改 {unresolvedCount > 0 ? `(${unresolvedCount})` : ''}
+                </button>
+                <label className="flex cursor-pointer items-center gap-2 px-1 text-[11px] text-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={reviewAfterAnnotation}
+                    onChange={(e) => setReviewAfterAnnotation(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-[#684BD2]"
+                  />
+                  <span>完成后进行审查</span>
+                </label>
+              </div>
+            )}
+
+            {isOutlineDoc && (
+              <button
+                type="button"
+                onClick={() => setCreateChaptersOpen(true)}
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-accent/45 bg-accent-soft px-3 py-2 text-xs font-semibold text-accent transition hover:bg-accent hover:text-on-accent"
+              >
+                <BookOpen className="h-3.5 w-3.5" />
+                开始创建正文章节
+              </button>
+            )}
+          </div>
         </div>
       )}
 
       {rightTab === 'lint' && (
         <div className="flex flex-1 flex-col overflow-hidden p-3.5 text-xs">
-          <div className="mb-3 space-y-2">
+          <div className="mb-3 space-y-2.5">
+            {/* Active Review Mode Strip */}
+            <div className="rounded-xl border border-border bg-surface-raised p-2.5 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-text-secondary">当前审查方式</span>
+                <span className="text-[11px] font-semibold text-accent">
+                  {reviewMode === 'self' ? '自审' : reviewMode === 'single' ? '单独审查' : '高级审查'}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-1">
+                {(['self', 'single', 'advanced'] as ReviewMode[]).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setReviewMode(m, true)}
+                    className={`rounded-lg border px-2 py-1 text-[11px] font-medium transition ${
+                      reviewMode === m
+                        ? 'border-accent bg-accent text-on-accent'
+                        : 'border-border bg-surface text-text-primary hover:border-accent/40'
+                    }`}
+                  >
+                    {m === 'self' ? '自审' : m === 'single' ? '单独审查' : '高级审查'}
+                  </button>
+                ))}
+              </div>
+              {reviewMode === 'advanced' && (
+                <div className="flex items-center gap-1.5 rounded-lg border border-amber-400/50 bg-amber-500/12 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-300">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                  <span>高级审查：该模式下会消耗大量token额度</span>
+                </div>
+              )}
+            </div>
+
             <div className="flex items-center justify-between">
-              <span className="font-semibold text-text-secondary">审查记录与报告（按时间倒序）</span>
+              <span className="font-semibold text-text-secondary">审查记录</span>
               <button
                 type="button"
                 onClick={() => void onRunLint()}
@@ -599,13 +710,13 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
           <div className="flex-1 space-y-2.5 overflow-y-auto">
             {reviewHistory.length === 0 ? (
               <div className="rounded-xl border border-dashed border-border p-6 text-center text-text-muted">
-                暂无审校记录。点击「审查本章」或「再次运行全文审查」，系统将以纯净可读格式汇总审查结论并按时间记录。
+                暂无审查记录
               </div>
             ) : (
               reviewHistory.map((entry) => (
-                <div key={entry.id} className="rounded-xl border border-border bg-surface-raised p-3 space-y-2">
+                <div key={entry.id} className="space-y-2 rounded-xl border border-border bg-surface-raised p-3">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5 min-w-0">
+                    <div className="flex min-w-0 items-center gap-1.5">
                       {entry.verdict === 'PASS' ? (
                         <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
                       ) : (
@@ -630,7 +741,7 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
                     <span>{new Date(entry.createdAt).toLocaleString()}</span>
                     <span>·</span>
                     <span>
-                      {entry.scope === 'full-book' ? '全文审查' : entry.scope === 'chapter' ? '本章审查' : '体检镜子'}
+                      {entry.scope === 'full-book' ? '全文审查' : entry.scope === 'chapter' ? '本章审查' : '快速体检'}
                     </span>
                     {entry.reviewerNames.length > 0 && (
                       <>
@@ -690,6 +801,28 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
         busy={reviewBusy}
         onCancel={() => setFullBookModalOpen(false)}
         onConfirm={triggerFullBookReview}
+      />
+
+      <ExpandedComposerModal
+        open={expandModalOpen}
+        value={draftPrompt}
+        onChange={setDraftPrompt}
+        onClose={() => setExpandModalOpen(false)}
+        onSend={async (withReview) => {
+          await onSendPrompt(undefined, Boolean(withReview))
+        }}
+      />
+
+      <CreateChaptersModal
+        open={createChaptersOpen}
+        outlineRelPath={activeTabRelPath || ''}
+        onClose={() => setCreateChaptersOpen(false)}
+        onConfirm={async (params) => {
+          await onCreateChaptersFromOutline({
+            outlineRelPath: activeTabRelPath || '',
+            ...params
+          })
+        }}
       />
     </aside>
   )

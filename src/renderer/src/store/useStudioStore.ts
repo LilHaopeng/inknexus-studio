@@ -1,6 +1,9 @@
 import { create } from 'zustand'
 import type {
+  ActiveWorkEntry,
   AgentBackendInfo,
+  AgentCommsMessage,
+  AgentRoleId,
   AgentSelection,
   AnnotationThread,
   ApiProviderConfig,
@@ -51,13 +54,17 @@ interface StudioState {
   streamingThinking: string
   statusText: string
   reviewMode: ReviewMode
+  reviewModeConfirmed: boolean
   agentSelection: AgentSelection
+  roleAgentOverrides: Record<string, Partial<Record<AgentRoleId, AgentSelection>>>
+  agentCommsByProject: Record<string, AgentCommsMessage[]>
+  activeWorks: Record<string, ActiveWorkEntry>
   localAgents: AgentBackendInfo[]
   apiConfigs: ApiProviderConfig[]
   lintReport: LintReport | null
   reviewHistory: ReviewHistoryEntry[]
   skillRegistry: SkillRegistryItem[]
-  appInfo: { version: string; author: string; repoUrl: string }
+  appInfo: { version: string; author: string; repoUrl: string; authorUrl: string }
   swarmJobs: SwarmJob[]
   storageReport: AppDataStorageReport | null
   externalChangedRelPath: string | null
@@ -80,21 +87,26 @@ interface StudioState {
   setPreComposedPrompt: (prompt: PreComposedPrompt | null) => void
   setChatMessages: (msgs: ChatMessage[]) => void
   appendChatMessage: (msg: ChatMessage) => void
+  updateChatMessage: (id: string, patch: Partial<ChatMessage>) => void
   setStreamingState: (patch: Partial<Pick<StudioState, 'isGenerating' | 'activeRequestId' | 'streamingText' | 'streamingThinking' | 'statusText'>>) => void
-  setReviewMode: (mode: ReviewMode) => void
+  setReviewMode: (mode: ReviewMode, confirmed?: boolean) => void
   setAgentSelection: (sel: AgentSelection) => void
+  setRoleAgentOverride: (projectRoot: string, role: AgentRoleId, sel: AgentSelection) => void
+  ensureRoleAgentSnapshot: (projectRoot: string, role: AgentRoleId) => AgentSelection
+  appendAgentComm: (msg: Omit<AgentCommsMessage, 'id' | 'timestamp'>) => void
+  setActiveWork: (entry: ActiveWorkEntry) => void
   setLocalAgents: (list: AgentBackendInfo[]) => void
   setApiConfigs: (list: ApiProviderConfig[]) => void
   setLintReport: (report: LintReport | null) => void
   setReviewHistory: (list: ReviewHistoryEntry[]) => void
   setSkillRegistry: (list: SkillRegistryItem[]) => void
-  setAppInfo: (info: { version: string; author: string; repoUrl: string }) => void
+  setAppInfo: (info: { version: string; author: string; repoUrl: string; authorUrl?: string }) => void
   setSwarmJobs: (jobs: SwarmJob[]) => void
   setStorageReport: (report: AppDataStorageReport | null) => void
   setExternalChangedRelPath: (relPath: string | null) => void
 }
 
-export const useStudioStore = create<StudioState>((set) => ({
+export const useStudioStore = create<StudioState>((set, get) => ({
   page: 'home',
   config: null,
   projects: [],
@@ -115,17 +127,26 @@ export const useStudioStore = create<StudioState>((set) => ({
   streamingThinking: '',
   statusText: '',
   reviewMode: 'single',
+  reviewModeConfirmed: false,
   agentSelection: {
     backendId: 'agy-cli',
-    model: 'gemini-4-neon-high',
+    model: 'gemini-4-neon',
     reasoning: 'high'
   },
+  roleAgentOverrides: {},
+  agentCommsByProject: {},
+  activeWorks: {},
   localAgents: [],
   apiConfigs: [],
   lintReport: null,
   reviewHistory: [],
   skillRegistry: [],
-  appInfo: { version: '1.0.0', author: '@LilHaopeng', repoUrl: 'https://github.com/LilHaopeng/inknexus-studio' },
+  appInfo: {
+    version: '1.0.1',
+    author: '@LilHaopeng',
+    repoUrl: 'https://github.com/LilHaopeng/inknexus-studio',
+    authorUrl: 'https://github.com/LilHaopeng'
+  },
   swarmJobs: [],
   storageReport: null,
   externalChangedRelPath: null,
@@ -179,15 +200,86 @@ export const useStudioStore = create<StudioState>((set) => ({
   setPreComposedPrompt: (preComposedPrompt) => set({ preComposedPrompt }),
   setChatMessages: (chatMessages) => set({ chatMessages }),
   appendChatMessage: (msg) => set((s) => ({ chatMessages: [...s.chatMessages, msg] })),
+  updateChatMessage: (id, patch) =>
+    set((s) => ({
+      chatMessages: s.chatMessages.map((m) => (m.id === id ? { ...m, ...patch } : m))
+    })),
   setStreamingState: (patch) => set((s) => ({ ...s, ...patch })),
-  setReviewMode: (reviewMode) => set({ reviewMode }),
+  setReviewMode: (reviewMode, confirmed) =>
+    set((s) => ({
+      reviewMode,
+      reviewModeConfirmed: confirmed !== undefined ? confirmed : s.reviewModeConfirmed
+    })),
   setAgentSelection: (agentSelection) => set({ agentSelection }),
+  setRoleAgentOverride: (projectRoot, role, sel) =>
+    set((s) => {
+      const key = projectRoot.toLowerCase()
+      return {
+        roleAgentOverrides: {
+          ...s.roleAgentOverrides,
+          [key]: {
+            ...(s.roleAgentOverrides[key] ?? {}),
+            [role]: sel
+          }
+        },
+        ...(role === 'coordinator' ? { agentSelection: sel } : {})
+      }
+    }),
+  ensureRoleAgentSnapshot: (projectRoot, role) => {
+    const state = get()
+    const key = projectRoot.toLowerCase()
+    const existing = state.roleAgentOverrides[key]?.[role]
+    if (existing) return existing
+    const coordinatorSel = state.roleAgentOverrides[key]?.coordinator ?? state.agentSelection
+    set((s) => ({
+      roleAgentOverrides: {
+        ...s.roleAgentOverrides,
+        [key]: {
+          ...(s.roleAgentOverrides[key] ?? {}),
+          [role]: { ...coordinatorSel }
+        }
+      }
+    }))
+    return coordinatorSel
+  },
+  appendAgentComm: (msg) =>
+    set((s) => {
+      const key = msg.projectRoot.toLowerCase()
+      const prev = s.agentCommsByProject[key] ?? []
+      const entry: AgentCommsMessage = {
+        ...msg,
+        id: `comm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        timestamp: Date.now()
+      }
+      return {
+        agentCommsByProject: {
+          ...s.agentCommsByProject,
+          [key]: [...prev, entry].slice(-120)
+        }
+      }
+    }),
+  setActiveWork: (entry) =>
+    set((s) => {
+      const key = entry.projectRoot.toLowerCase()
+      return {
+        activeWorks: {
+          ...s.activeWorks,
+          [key]: entry
+        }
+      }
+    }),
   setLocalAgents: (localAgents) => set({ localAgents }),
   setApiConfigs: (apiConfigs) => set({ apiConfigs }),
   setLintReport: (lintReport) => set({ lintReport }),
   setReviewHistory: (reviewHistory) => set({ reviewHistory }),
   setSkillRegistry: (skillRegistry) => set({ skillRegistry }),
-  setAppInfo: (appInfo) => set({ appInfo }),
+  setAppInfo: (info) =>
+    set({
+      appInfo: {
+        ...info,
+        authorUrl: info.authorUrl || 'https://github.com/LilHaopeng'
+      }
+    }),
   setSwarmJobs: (swarmJobs) => set({ swarmJobs }),
   setStorageReport: (storageReport) => set({ storageReport }),
   setExternalChangedRelPath: (externalChangedRelPath) => set({ externalChangedRelPath })

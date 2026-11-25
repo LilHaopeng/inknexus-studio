@@ -12,6 +12,7 @@ import type {
   CreationMode,
   ImportedFileItem,
   PermissionMode,
+  ProjectCategory,
   ReviewHistoryEntry,
   ReviewMode,
   SkillId,
@@ -224,7 +225,8 @@ export class StudioRuntime {
     ipcMain.handle('app:getInfo', () => ({
       version: this.appUpdater.getCurrentVersion(),
       author: '@LilHaopeng',
-      repoUrl: `https://github.com/${APP_GITHUB_OWNER}/${APP_GITHUB_REPO}`
+      repoUrl: `https://github.com/${APP_GITHUB_OWNER}/${APP_GITHUB_REPO}`,
+      authorUrl: `https://github.com/${APP_GITHUB_OWNER}`
     }))
     ipcMain.handle('app:openExternal', (_, url: string) => shell.openExternal(url))
 
@@ -273,6 +275,19 @@ export class StudioRuntime {
       this.projectManager.createFile(projectRoot, relPath, initial)
     )
     ipcMain.handle('projects:openFolder', (_, targetPath: string) => shell.openPath(targetPath))
+    ipcMain.handle(
+      'projects:classify',
+      (_, projectRoot: string, targetCategory: Exclude<ProjectCategory, 'unclassified'>) => {
+        const ws = this.store.getConfig().workspaceRoot
+        this.projectManager.classifyAndMoveProject(ws, projectRoot, targetCategory)
+        return this.projectManager.scanWorkspaceProjects(ws)
+      }
+    )
+    ipcMain.handle('projects:deleteFolder', (_, projectRoot: string) => {
+      const ws = this.store.getConfig().workspaceRoot
+      this.projectManager.deleteProjectFolder(ws, projectRoot)
+      return this.projectManager.scanWorkspaceProjects(ws)
+    })
     ipcMain.handle('projects:radarReports', (_, workspaceRoot?: string) =>
       this.radarService.scanReports(workspaceRoot || this.store.getConfig().workspaceRoot)
     )
@@ -288,7 +303,7 @@ export class StudioRuntime {
       const res = await dialog.showOpenDialog({
         title: '选择作品或素材文件（支持多选）',
         properties: ['openFile', 'multiSelections'],
-        filters: [{ name: '文档与小说', extensions: ['docx', 'txt', 'md'] }]
+        filters: [{ name: '文档与小说', extensions: ['pdf', 'docx', 'txt', 'md'] }]
       })
       return res.canceled ? [] : res.filePaths
     })
@@ -868,6 +883,10 @@ export class StudioRuntime {
     })
     ipcMain.handle('storage:clearSwarm', () => {
       this.store.clearSwarmHistory()
+      return this.store.getStorageReport()
+    })
+    ipcMain.handle('storage:clearTempCaches', () => {
+      this.store.clearTempCachesOnly()
       return this.store.getStorageReport()
     })
     ipcMain.handle('storage:openAppData', () => shell.openPath(this.store.rootDir))

@@ -21,18 +21,20 @@ interface NavItem {
 }
 
 export const GlobalNav: React.FC = () => {
-  const { page, setPage, swarmJobs, activeProject, appInfo } = useStudioStore()
+  const { page, setPage, swarmJobs, activeWorks, activeProject, appInfo } = useStudioStore()
   const [manualExpanded, setManualExpanded] = useState<boolean | null>(null)
 
   const compact = manualExpanded !== null ? !manualExpanded : page === 'workbench'
   const activeSwarmCount = swarmJobs.filter((j) =>
     ['queued', 'writing', 'linting', 'self_review', 'review_round_1', 'revising_1', 'review_round_2', 'revising_2'].includes(j.stage)
   ).length
+  const activeWorkCount = Object.values(activeWorks).filter((w) => w.stage !== 'idle').length
+  const totalActiveCount = activeSwarmCount + activeWorkCount
 
   const items: NavItem[] = [
     { id: 'home', label: '创作大厅', icon: Home },
     { id: 'projects', label: '我的作品', icon: FolderKanban },
-    { id: 'swarm', label: '并发队列', icon: Workflow, badge: activeSwarmCount || undefined },
+    { id: 'swarm', label: '工作区', icon: Workflow, badge: totalActiveCount || undefined },
     { id: 'radar', label: '市场雷达', icon: Radar },
     { id: 'settings', label: '设置', icon: Settings }
   ]
@@ -135,13 +137,15 @@ export const GlobalNav: React.FC = () => {
         </div>
       )}
 
-      {/* 左下角：InkNexus 版本号与 @LilHaopeng GitHub 开源超链接 */}
+      {/* 左下角：InkNexus 版本号与 @LilHaopeng GitHub 超链接 */}
       <div className="border-t border-border/60 p-2.5">
         {compact ? (
           <button
             type="button"
-            title={`InkNexus v${appInfo.version} · ${appInfo.author} (GitHub)`}
-            onClick={() => void window.inknexus.app.openExternal(appInfo.repoUrl)}
+            title={`InkNexus ${appInfo.version} · ${appInfo.author} (GitHub)`}
+            onClick={() =>
+              void window.inknexus.app.openExternal(appInfo.authorUrl || 'https://github.com/LilHaopeng')
+            }
             className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg text-text-secondary transition hover:bg-accent-soft hover:text-accent"
           >
             <Github className="h-4 w-4" />
@@ -153,7 +157,9 @@ export const GlobalNav: React.FC = () => {
             </div>
             <button
               type="button"
-              onClick={() => void window.inknexus.app.openExternal(appInfo.repoUrl)}
+              onClick={() =>
+                void window.inknexus.app.openExternal(appInfo.authorUrl || 'https://github.com/LilHaopeng')
+              }
               className="mt-1 inline-flex items-center gap-1 text-text-muted transition hover:text-accent hover:underline"
             >
               <Github className="h-3 w-3" />
