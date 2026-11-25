@@ -1,0 +1,33 @@
+appId: com.inknexus.studio
+productName: 墨枢 InkNexus Studio
+copyright: Copyright © 2026 InkNexus Team
+directories:
+  buildResources: build
+  output: dist
+files:
+  - "out/**/*"
+  - "package.json"
+  - "!node_modules/**/*"
+  - "node_modules/**/*"
+extraResources:
+  - from: resources/skills
+    to: skills
+  - from: THIRD_PARTY_LICENSES.md
+    to: THIRD_PARTY_LICENSES.md
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 墨枢 InkNexus Studio
+portable:
+  artifactName: InkNexus-Studio-${version}-Portable.exe

@@ -1,0 +1,4 @@
+interface:
+  display_name: "AI短剧与沙雕短剧编剧工作室"
+  short_description: "支持从零原创与小说/大纲改编的AI短剧全流程编剧：写前节奏逻辑匹配、MiniMax-H3/漫剧/沙雕三大模板、控算力资产表、分集剧本、按需分镜与视听体检"
+  default_prompt: "使用 $ai-drama-script-studio 对当前创意或已有小说/大纲完成剧种选型与写前节奏逻辑预匹配，建立控算力固定资产表与分集卡点纲，再按 MiniMax-H3 写实 AI 剧、高奇观漫剧或沙雕短剧规范撰写高留存完整剧本。"

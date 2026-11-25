@@ -1,0 +1,25 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="20" y1="20" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#8B6BF2"/>
+      <stop offset="52%" stop-color="#6B4CE6"/>
+      <stop offset="100%" stop-color="#4A6CF7"/>
+    </linearGradient>
+    <linearGradient id="ringGrad" x1="36" y1="70" x2="220" y2="186" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E6DDFB" stop-opacity="0.95"/>
+      <stop offset="50%" stop-color="#B9AAFF" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#9BE9EC" stop-opacity="0.9"/>
+    </linearGradient>
+    <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="1"/>
+      <stop offset="55%" stop-color="#E7DCFF" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#7453DC" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="16" y="16" width="224" height="224" rx="56" fill="url(#bgGrad)"/>
+  <circle cx="128" cy="128" r="78" fill="url(#coreGlow)" fill-opacity="0.4"/>
+  <ellipse cx="128" cy="128" rx="92" ry="38" transform="rotate(-24 128 128)" stroke="url(#ringGrad)" stroke-width="10" fill="none"/>
+  <ellipse cx="128" cy="128" rx="82" ry="30" transform="rotate(28 128 128)" stroke="url(#ringGrad)" stroke-width="6" stroke-opacity="0.7" fill="none"/>
+  <path d="M128 66C132 102 154 124 190 128C154 132 132 154 128 190C124 154 102 132 66 128C102 124 124 102 128 66Z" fill="#FFFFFF"/>
+  <circle cx="186" cy="76" r="7" fill="#CBEFEE"/>
+</svg>

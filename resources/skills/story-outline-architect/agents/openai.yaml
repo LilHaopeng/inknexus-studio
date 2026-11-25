@@ -1,0 +1,4 @@
+interface:
+  display_name: "小说大纲架构师"
+  short_description: "从创作初衷构建因果严密、动作具象、张弛有度的小说大纲并导出 DOCX"
+  default_prompt: "使用 $story-outline-architect 先整理创作初衷、核心追读问题与 Story DNA，再分层规划人物张力、故事弧与具象章纲（默认简体中文，也可主动指定英文或其他语言起笔）。"
