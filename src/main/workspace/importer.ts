@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
 import { execFile } from 'child_process'
+import zlib from 'zlib'
 import mammoth from 'mammoth'
 import TurndownService from 'turndown'
 import iconv from 'iconv-lite'
@@ -9,6 +10,38 @@ import type { CreationMode, ImportFileRole, ImportedFileItem, ProjectSummary } f
 import { ProjectManager } from './project-manager'
 
 const turndown = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-' })
+
+function extractPdfTextPureJs(filePath: string): string {
+  const buf = fs.readFileSync(filePath)
+  const rawLatin = buf.toString('latin1')
+  const texts: string[] = []
+
+  const extractStringOps = (chunk: string) => {
+    const ops = chunk.match(/\(([^()]*)\)\s*Tj|\[([^\]]+)\]\s*TJ/g)
+    if (!ops) return
+    for (const op of ops) {
+      const matches = op.match(/\(([^()]*)\)/g)
+      if (!matches) continue
+      const line = matches.map((m) => m.slice(1, -1).replace(/\\([()\\])/g, '$1')).join('')
+      if (line.trim()) texts.push(line.trim())
+    }
+  }
+
+  extractStringOps(rawLatin)
+  const streamRegex = /stream\r?\n([\s\S]*?)\r?\nendstream/g
+  let m: RegExpExecArray | null
+  while ((m = streamRegex.exec(rawLatin)) !== null) {
+    try {
+      const rawStream = Buffer.from(m[1], 'latin1')
+      const inflated = zlib.inflateSync(rawStream).toString('utf8')
+      extractStringOps(inflated)
+    } catch {
+      // ignore non-deflate or image streams
+    }
+  }
+
+  return texts.join('\n').trim()
+}
 
 export function extractPdfText(filePath: string): Promise<string> {
   const pyScript = `
@@ -36,25 +69,35 @@ except Exception:
 sys.stdout.write("\\n\\n".join(text_parts))
 `.trim()
 
-  return new Promise((resolve, reject) => {
-    execFile(
-      'python',
-      ['-c', pyScript, filePath],
-      {
-        timeout: 25000,
-        windowsHide: true,
-        maxBuffer: 16 * 1024 * 1024,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
-      },
-      (err, stdout, stderr) => {
-        if (err) {
-          reject(new Error(stderr?.trim() || err.message || 'PDF 解析失败'))
-          return
+  const runPy = (cmd: string, prefixArgs: string[]) =>
+    new Promise<string>((resolve, reject) => {
+      execFile(
+        cmd,
+        [...prefixArgs, '-c', pyScript, filePath],
+        {
+          timeout: 25000,
+          windowsHide: true,
+          maxBuffer: 16 * 1024 * 1024,
+          env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+        },
+        (err, stdout, stderr) => {
+          if (err) {
+            reject(new Error(stderr?.trim() || err.message || 'PDF 解析失败'))
+            return
+          }
+          resolve((stdout || '').trim())
         }
-        resolve((stdout || '').trim())
-      }
-    )
-  })
+      )
+    })
+
+  return runPy('python', [])
+    .catch(() => runPy('py', ['-3']))
+    .catch(() => runPy('python3', []))
+    .catch((err) => {
+      const fallback = extractPdfTextPureJs(filePath)
+      if (fallback.trim()) return fallback
+      throw err
+    })
 }
 
 export function guessFileRole(fileName: string, previewText: string): ImportFileRole {

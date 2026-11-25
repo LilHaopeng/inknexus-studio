@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { History, RotateCcw, X } from 'lucide-react'
 import type { SnapshotRecord } from '@shared/types'
 import { useStudioStore } from '../../store/useStudioStore'
@@ -20,9 +21,23 @@ export const VersionDrawer: React.FC<VersionDrawerProps> = ({ open, onClose, onR
     void window.inknexus.snapshots.list(activeProject.rootPath).then((list) => setSnapshots(list as SnapshotRecord[]))
   }, [open, activeProject])
 
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open, onClose])
+
   if (!open || !activeProject) return null
 
-  const filtered = snapshots.filter((s) => !activeTabRelPath || s.filePath.endsWith(activeTabRelPath.replace(/\//g, '\\')) || s.filePath.endsWith(activeTabRelPath))
+  const filtered = snapshots.filter(
+    (s) =>
+      !activeTabRelPath ||
+      s.filePath.endsWith(activeTabRelPath.replace(/\//g, '\\')) ||
+      s.filePath.endsWith(activeTabRelPath)
+  )
 
   const handleSelect = async (snap: SnapshotRecord) => {
     setSelectedId(snap.id)
@@ -37,23 +52,37 @@ export const VersionDrawer: React.FC<VersionDrawerProps> = ({ open, onClose, onR
     onClose()
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/35 backdrop-blur-xs">
-      <div className="flex h-full w-full max-w-2xl flex-col border-l border-border bg-surface shadow-2xl">
-        <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
+  return createPortal(
+    <div
+      data-testid="version-drawer-backdrop"
+      onClick={onClose}
+      className="no-drag fixed inset-0 z-[80] flex justify-end bg-black/40 backdrop-blur-xs"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="flex h-full w-full max-w-2xl flex-col border-l border-border bg-surface shadow-2xl"
+      >
+        <div className="no-drag flex items-center justify-between border-b border-border px-5 py-3.5">
           <div className="flex items-center gap-2">
             <History className="h-4 w-4 text-accent" />
             <h3 className="text-sm font-semibold text-text-primary">版本快照时间轴（存放在 AppData）</h3>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg p-1 text-text-muted hover:bg-surface-raised">
-            <X className="h-4 w-4" />
+          <button
+            type="button"
+            data-testid="version-drawer-close"
+            onClick={onClose}
+            aria-label="关闭历史版本"
+            className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 text-xs text-text-secondary transition hover:border-accent hover:bg-surface-raised hover:text-text-primary"
+          >
+            <X className="h-3.5 w-3.5" />
+            关闭
           </button>
         </div>
 
         <div className="grid min-h-0 flex-1 grid-cols-12">
           <div className="col-span-5 space-y-2 overflow-y-auto border-r border-border p-3">
             {filtered.length === 0 ? (
-              <div className="p-4 text-center text-xs text-text-muted">暂无该文件快照（AI 写入前与手动存盘时会自动生成）</div>
+              <div className="p-4 text-center text-xs text-text-muted">暂无该文件快照（AI 写入前与自动/手动存盘时会按周期生成）</div>
             ) : (
               filtered.map((s) => (
                 <div
@@ -97,6 +126,7 @@ export const VersionDrawer: React.FC<VersionDrawerProps> = ({ open, onClose, onR
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

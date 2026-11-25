@@ -54,6 +54,7 @@ export class RadarService {
     platform: string
     track: 'short' | 'long' | 'ai-drama' | 'both'
     notes?: string
+    liveCapturedText?: string
   }): { systemPrompt: string; userPrompt: string; targetFolderName: string } {
     const skill = this.skillLoader.loadSkill('webnovel-market-radar')
     const baselinesPath = skill?.references['platform-baselines.md']
@@ -62,10 +63,11 @@ export class RadarService {
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '')
     const safePlatform = params.platform.replace(/[\\/:*?"<>|\s]/g, '')
     const targetFolderName = `${dateStr}_${safePlatform}_${params.track}`
+    const hasLive = Boolean(params.liveCapturedText?.trim())
 
     const systemPrompt = [
       '你是「墨枢」内置的市场扫榜与选题分析专家，严格遵循 webnovel-market-radar 规范。',
-      '要求：严禁编造具体在读人数或真实点击数；无实时网页抓取数据时须明确说明“基于内置市场基线参考”，可行性封顶「中」；强制原创化置换脑洞与反转切口。',
+      '要求：严禁编造具体在读人数或真实点击数；无实时网页抓取数据时须明确说明“基于内置市场基线参考”，可行性封顶「中」；若下方提供【实时内置浏览器采集样本】，请基于该实时样本提炼真实风向；强制原创化置换脑洞与反转切口。',
       skill ? `\n【市场雷达规范】\n${skill.skillSummary.slice(0, 2200)}` : '',
       baselines ? `\n【内置平台基线参考】\n${baselines}` : ''
     ]
@@ -74,16 +76,17 @@ export class RadarService {
 
     const userPrompt = [
       `请针对平台「${params.platform}」、赛道「${params.track}」执行一次结构化市场扫榜与选题简报生成。`,
-      params.notes?.trim() ? `\n【用户补充关注方向或近期榜单素材】\n${params.notes.trim()}` : '',
+      hasLive ? `\n【实时内置浏览器采集样本】\n${params.liveCapturedText!.trim().slice(0, 7000)}` : '',
+      params.notes?.trim() ? `\n【用户补充关注方向或手动粘贴榜单素材】\n${params.notes.trim()}` : '',
       '',
       '请严格按以下两部分分隔输出，方便软件直接入库为 扫榜报告.md 与 选题简报.md：',
       '===SCAN_REPORT===',
       `# 网文扫榜报告：${params.platform}（${params.track}）`,
       `- 扫榜日期：${new Date().toISOString().slice(0, 10)}`,
       `- 赛道类型：${params.track}`,
-      '- 采集方式：baseline（或用户提供样本）',
+      `- 采集方式：${hasLive ? '内置浏览器实时采集' : params.notes?.trim() ? '用户提供样本' : '内置基线参考（无实时数据）'}`,
       '- 有效样本数：...',
-      '- 数据质量：OK / 内置参考降级',
+      `- 数据质量：${hasLive ? 'OK（实时抓取）' : '降级内置基线参考'}`,
       '## 市场概况',
       '## 情绪与题材热度排行',
       '## 风口与饱和预警',

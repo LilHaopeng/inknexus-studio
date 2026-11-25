@@ -27,14 +27,43 @@ export const fallbackSecretVault: SecretVault = {
   decrypt: (cipher: string) => Buffer.from(cipher, 'base64').toString('utf8')
 }
 
+export function resolveDefaultWorkspaceRoot(): string {
+  const exeBase = path.basename(process.execPath || '').toLowerCase()
+  const isPackagedExe =
+    Boolean(process.execPath) &&
+    exeBase !== 'electron.exe' &&
+    exeBase !== 'node.exe' &&
+    !exeBase.startsWith('node') &&
+    !(process as unknown as { defaultApp?: boolean }).defaultApp
+  if (isPackagedExe) {
+    return path.join(path.dirname(process.execPath), 'Contents')
+  }
+  const devWorkspace = 'c:\\Dbackup\\AI小说\\InkNexus'
+  if (fs.existsSync(devWorkspace)) {
+    return devWorkspace
+  }
+  return path.join(os.homedir(), 'Documents', 'InkNexus', 'Contents')
+}
+
+export function ensureContentsStructure(rootDir: string): void {
+  try {
+    fs.mkdirSync(rootDir, { recursive: true })
+    for (const sub of ['长文小说', '短篇网文', 'AI剧本', '未分类', '扫榜']) {
+      fs.mkdirSync(path.join(rootDir, sub), { recursive: true })
+    }
+  } catch {
+    // Ignore EACCES when user installs into a read-only folder such as C:\Program Files
+  }
+}
+
 export const DEFAULT_CONFIG: AppConfig = {
   theme: 'aurora-light',
   editorReadTheme: 'default',
   effectsMode: 'full',
-  workspaceRoot: 'c:\\Dbackup\\AI小说\\InkNexus',
+  workspaceRoot: resolveDefaultWorkspaceRoot(),
   permissionMode: 'diff-review',
-  defaultAgentId: 'agy-cli',
-  defaultModel: 'gemini-4-neon-high',
+  defaultAgentId: '',
+  defaultModel: '',
   defaultReasoning: 'high',
   defaultReviewMode: 'single',
   maxSwarmConcurrency: 3,
@@ -144,13 +173,17 @@ export class AppDataStore {
   getConfig(): AppConfig {
     const saved = safeReadJson<Partial<AppConfig>>(this.configPath, {})
     const merged = { ...DEFAULT_CONFIG, ...saved }
+    const fallbackRoot = resolveDefaultWorkspaceRoot()
     if (
-      saved.workspaceRoot &&
-      path.resolve(saved.workspaceRoot).toLowerCase() === path.resolve('c:\\Dbackup\\AI小说').toLowerCase() &&
-      fs.existsSync('c:\\Dbackup\\AI小说\\InkNexus')
+      !merged.workspaceRoot ||
+      (!fs.existsSync(merged.workspaceRoot) &&
+        /^c:\\dbackup\\ai小说/i.test(path.resolve(merged.workspaceRoot)))
     ) {
-      merged.workspaceRoot = 'c:\\Dbackup\\AI小说\\InkNexus'
+      merged.workspaceRoot = fallbackRoot
       atomicWriteJson(this.configPath, merged)
+    }
+    if (path.resolve(merged.workspaceRoot).toLowerCase() === path.resolve(fallbackRoot).toLowerCase()) {
+      ensureContentsStructure(merged.workspaceRoot)
     }
     return merged
   }

@@ -133,6 +133,144 @@ app.whenReady().then(async () => {
     createTray(mainWindow)
   }
 
+  const smokeV5DirArg = process.argv.find((a) => a.startsWith('--smoke-v5='))
+  if (smokeV5DirArg && mainWindow) {
+    const win = mainWindow
+    const outDir = smokeV5DirArg.slice('--smoke-v5='.length)
+    fs.mkdirSync(outDir, { recursive: true })
+    win.webContents.once('did-finish-load', async () => {
+      const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+      const snap = async (name: string) => {
+        if (win.isDestroyed()) return
+        const img = await win.webContents.capturePage()
+        fs.writeFileSync(path.join(outDir, `${name}.png`), img.toPNG())
+      }
+      await wait(3200)
+
+      // 1. Zero-CLI Top Bar check (must NOT show agy)
+      const connText = await win.webContents.executeJavaScript(
+        `window.__inknexusSmoke?.('simulate-no-cli')`
+      )
+      await wait(500)
+      await snap('v5_01_no_cli_home')
+
+      // 2. Open Workbench & real mouse drag test on left resize handle (+80px right must increase left width)
+      await win.webContents.executeJavaScript(`window.__inknexusSmoke?.('workbench-split')`)
+      await wait(900)
+      const handleRect = await win.webContents.executeJavaScript(`(() => {
+        const h = document.querySelector('[data-testid="wb-left-resize-handle"]');
+        const left = document.querySelector('[data-panel-id="wb-left"]');
+        if (!h || !left) return null;
+        const r = h.getBoundingClientRect();
+        const lr = left.getBoundingClientRect();
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), leftWidth: lr.width };
+      })()`)
+
+      let leftWidthAfter = 0
+      if (handleRect) {
+        win.focus()
+        win.webContents.sendInputEvent({ type: 'mouseMove', x: handleRect.x, y: handleRect.y })
+        await wait(60)
+        win.webContents.sendInputEvent({
+          type: 'mouseDown',
+          x: handleRect.x,
+          y: handleRect.y,
+          button: 'left',
+          clickCount: 1,
+          modifiers: ['leftButtonDown']
+        })
+        await wait(80)
+        for (let step = 1; step <= 8; step++) {
+          win.webContents.sendInputEvent({
+            type: 'mouseMove',
+            x: handleRect.x + step * 10,
+            y: handleRect.y,
+            modifiers: ['leftButtonDown']
+          })
+          await wait(25)
+        }
+        win.webContents.sendInputEvent({
+          type: 'mouseUp',
+          x: handleRect.x + 80,
+          y: handleRect.y,
+          button: 'left',
+          clickCount: 1
+        })
+        await wait(250)
+        leftWidthAfter = await win.webContents.executeJavaScript(
+          `document.querySelector('[data-panel-id="wb-left"]')?.getBoundingClientRect().width || 0`
+        )
+      }
+
+      // 3. Open VersionDrawer, verify close button clickable & closes cleanly
+      await win.webContents.executeJavaScript(`window.__inknexusSmoke?.('open-version-drawer')`)
+      await wait(450)
+      await snap('v5_02_version_drawer')
+      const closeBtnRect = await win.webContents.executeJavaScript(`(() => {
+        const b = document.querySelector('[data-testid="version-drawer-close"]');
+        if (!b) return null;
+        const r = b.getBoundingClientRect();
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), top: r.top };
+      })()`)
+      if (closeBtnRect) {
+        win.webContents.sendInputEvent({ type: 'mouseDown', x: closeBtnRect.x, y: closeBtnRect.y, button: 'left', clickCount: 1 })
+        win.webContents.sendInputEvent({ type: 'mouseUp', x: closeBtnRect.x, y: closeBtnRect.y, button: 'left', clickCount: 1 })
+      }
+      await wait(350)
+      const drawerClosedAfterClick = await win.webContents.executeJavaScript(
+        `!document.querySelector('[data-testid="version-drawer-backdrop"]')`
+      )
+
+      // 4. Right-click 世界观 -> 基于世界观创建大纲
+      await win.webContents.executeJavaScript(`window.__inknexusSmoke?.('open-world-context')`)
+      await wait(400)
+      await snap('v5_03_world_context_menu')
+      const ctxMenuVisible = await win.webContents.executeJavaScript(
+        `Boolean(document.querySelector('[data-testid="asset-context-menu"]')?.textContent?.includes('基于世界观创建大纲'))`
+      )
+      await win.webContents.executeJavaScript(`document.body.click()`)
+
+      // 5. Startup silent update banner (bottom-right)
+      await win.webContents.executeJavaScript(`window.__inknexusSmoke?.('simulate-update-banner')`)
+      await wait(450)
+      await snap('v5_04_update_toast')
+
+      // 6. Settings -> Local Agent CLI top repair prompt card
+      await win.webContents.executeJavaScript(`window.__inknexusSmoke?.('settings-agents')`)
+      await wait(700)
+      await snap('v5_05_settings_cli_repair')
+
+      // 7. Market Radar -> Built-in Browser capture buttons
+      await win.webContents.executeJavaScript(`window.__inknexusSmoke?.('radar')`)
+      await wait(600)
+      await snap('v5_06_radar_builtin_browser')
+
+      // 8. World Doc in Editor -> green-zone "生成大纲" button left of 书籍
+      const worldBtnVisible = await win.webContents.executeJavaScript(`window.__inknexusSmoke?.('open-world-doc')`)
+      await wait(500)
+      await snap('v5_07_editor_world_btn')
+
+      // 9. Settings -> Updater Changelog display
+      await win.webContents.executeJavaScript(`window.__inknexusSmoke?.('settings-updater')`)
+      await wait(500)
+      await snap('v5_08_settings_updater_changelog')
+
+      const report = {
+        noCliPillText: connText,
+        leftPanelWidthBefore: handleRect?.leftWidth ?? 0,
+        leftPanelWidthAfter: leftWidthAfter,
+        dragDirectionCorrect: Boolean(handleRect && leftWidthAfter > handleRect.leftWidth + 20),
+        versionCloseBtnTop: closeBtnRect?.top ?? -1,
+        drawerClosedAfterClick,
+        worldContextMenuVisible: ctxMenuVisible,
+        editorWorldActionBtnVisible: Boolean(worldBtnVisible)
+      }
+      fs.writeFileSync(path.join(outDir, 'v5_sim_report.json'), JSON.stringify(report, null, 2), 'utf8')
+      isQuitting = true
+      app.quit()
+    })
+  }
+
   if (smokeDirArg && mainWindow) {
     const outDir = smokeDirArg.slice('--smoke-screenshots='.length)
     fs.mkdirSync(outDir, { recursive: true })

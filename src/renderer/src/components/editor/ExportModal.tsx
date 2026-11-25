@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Download, FolderOpen, X } from 'lucide-react'
 import type { ProjectSummary } from '@shared/types'
 import { useStudioStore } from '../../store/useStudioStore'
@@ -35,12 +36,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({ open, project, onClose
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-xs">
-      <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-5 shadow-2xl">
+  return createPortal(
+    <div onClick={onClose} className="no-drag fixed inset-0 z-[80] flex items-center justify-center bg-black/45 p-4 backdrop-blur-xs">
+      <div onClick={(e) => e.stopPropagation()} className="w-full max-w-md rounded-2xl border border-border bg-surface p-5 shadow-2xl">
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <h3 className="text-base font-semibold text-text-primary">导出交付稿（Python 出版级排版）</h3>
+            <h3 className="text-base font-semibold text-text-primary">导出交付稿（出版级排版）</h3>
             <p className="text-xs text-text-muted">目标作品：《{target.title}》</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg p-1 text-text-muted hover:bg-surface-raised">
@@ -132,6 +133,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ open, project, onClose
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
@@ -20,6 +21,7 @@ import { StoryBoardModal } from '../components/editor/StoryBoardModal'
 import { AssetCategoryPanel, type AssetCategoryKey } from '../components/workbench/AssetCategoryPanel'
 import { AssetCompleteModal } from '../components/workbench/AssetCompleteModal'
 import { AgentCommsBoard } from '../components/workbench/AgentCommsBoard'
+import { CreateChaptersModal } from '../components/ui/CreateChaptersModal'
 
 interface WorkbenchProps {
   versionDrawerOpen: boolean
@@ -76,7 +78,33 @@ export const Workbench: React.FC<WorkbenchProps> = ({
   const [auditionOpen, setAuditionOpen] = useState(false)
   const [storyBoardOpen, setStoryBoardOpen] = useState(false)
   const [completeModalCat, setCompleteModalCat] = useState<AssetCategoryKey | null>(null)
+  const [outlineToProseRelPath, setOutlineToProseRelPath] = useState<string | null>(null)
   const autoPlanTriggeredFor = useRef<string>('')
+  const lastAutoSnapshotAt = useRef<Record<string, number>>({})
+  const activeTab = openTabs.find((t) => t.relPath === activeTabRelPath)
+
+  // Workspace auto-save: automatically persist edits after 1s debounce (with periodic snapshots)
+  useEffect(() => {
+    if (!activeProject || !activeTab || !activeTab.dirty || activeTab.locked) return
+    const timer = setTimeout(() => {
+      const state = useStudioStore.getState()
+      const current = state.openTabs.find((t) => t.relPath === activeTab.relPath)
+      if (!current || !current.dirty || current.locked || !state.activeProject) return
+      const now = Date.now()
+      const lastSnap = lastAutoSnapshotAt.current[current.relPath] ?? 0
+      const shouldSnap = now - lastSnap > 180_000
+      if (shouldSnap) lastAutoSnapshotAt.current[current.relPath] = now
+      void window.inknexus.projects
+        .writeFile(state.activeProject.rootPath, current.relPath, current.content, shouldSnap)
+        .then(() => {
+          updateTabContent(current.relPath, current.content, true)
+        })
+        .catch(() => {
+          // keep dirty state if locked or transiently unavailable
+        })
+    }, 1000)
+    return () => clearTimeout(timer)
+  }, [activeProject, activeTab?.relPath, activeTab?.content, activeTab?.dirty, activeTab?.locked, updateTabContent])
 
   // Populate composer or trigger Coordinator initial planning when arriving from HomeHub
   useEffect(() => {
@@ -175,6 +203,16 @@ export const Workbench: React.FC<WorkbenchProps> = ({
 
   const openFile = async (relPath: string, name?: string) => {
     if (!activeProject) return
+    // Flush current dirty non-locked tab cleanly before switching files
+    const currentTab = openTabs.find((t) => t.relPath === activeTabRelPath)
+    if (currentTab && currentTab.dirty && !currentTab.locked) {
+      try {
+        await window.inknexus.projects.writeFile(activeProject.rootPath, currentTab.relPath, currentTab.content, false)
+        updateTabContent(currentTab.relPath, currentTab.content, true)
+      } catch {
+        // ignore flush error on tab switch
+      }
+    }
     try {
       const { content } = await window.inknexus.projects.readFile(activeProject.rootPath, relPath)
       const locked = canonLocks.includes(relPath)
@@ -423,6 +461,60 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         : `严格依据大纲《${outlineTitle}》顺序撰写接下来的 ${params.chapterCount} 个正文章节（使用单一作者保持文风统一）`
     const fullPrompt = `${goalDesc}。\n${params.extraNote ? `补充要求：${params.extraNote}` : ''}`
     await handleSendPrompt(fullPrompt, useStudioStore.getState().reviewModeConfirmed)
+  }
+
+  const handleCreateOutlineFromWorld = async (worldRelPath?: string) => {
+    if (!activeProject) return
+    let refText = ''
+    if (worldRelPath) {
+      try {
+        const res = await window.inknexus.projects.readFile(activeProject.rootPath, worldRelPath)
+        refText = res.content.slice(0, 3200)
+      } catch {
+        // ignore unreadable doc
+      }
+    }
+    const worldName = worldRelPath ? worldRelPath.split('/').pop()?.replace(/\.(md|txt|docx|pdf)$/i, '') : '现有世界观设定'
+    const prompt = [
+      `请基于「${worldName}」为作品《${activeProject.title}》创建兼容的核心故事大纲架构与剧情推进蓝图。`,
+      refText ? `【世界观设定参考（${worldRelPath}）】\n${refText}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+    await triggerCoordinatorPlan(`基于世界观创建大纲（${worldName}）`, prompt)
+  }
+
+  const handleCreateProseFromOutline = (outlineRelPath?: string) => {
+    setOutlineToProseRelPath(outlineRelPath || '大纲/01_故事架构.md')
+  }
+
+  const handleExportAssets = async (params: {
+    category: AssetCategoryKey
+    relPaths: string[]
+    mergeMode: 'merged' | 'separate'
+  }) => {
+    if (!activeProject) return
+    try {
+      const res = await window.inknexus.projects.exportAssets({
+        projectRoot: activeProject.rootPath,
+        title: activeProject.title,
+        category: params.category,
+        relPaths: params.relPaths,
+        mergeMode: params.mergeMode
+      })
+      if (res.ok) {
+        toast.success(res.message, {
+          action: {
+            label: '打开所在目录',
+            onClick: () => void window.inknexus.projects.openFolder(res.outputDir)
+          }
+        })
+      } else {
+        toast.error(res.message)
+      }
+    } catch (err) {
+      toast.error(`导出失败：${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   const handleCompleteAsset = async (params: {
@@ -686,34 +778,40 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         </div>
       )}
 
-      <PanelGroup direction="horizontal" className="h-full">
+      <PanelGroup id="workbench-outer-panels" direction="horizontal" className="h-full">
         {!focusMode && (
           <>
-            <Panel defaultSize={21} minSize={15} maxSize={30}>
+            <Panel id="wb-left" order={1} defaultSize={21} minSize={15} maxSize={30}>
               <aside className="flex h-full flex-col border-r border-border">
-                <PanelGroup direction="vertical" className="h-full">
-                  <Panel defaultSize={44} minSize={24}>
+                <PanelGroup id="workbench-left-vertical" direction="vertical" className="h-full">
+                  <Panel id="wb-assets" order={1} defaultSize={44} minSize={24}>
                     <AssetCategoryPanel
                       assets={assets}
                       activeTabRelPath={activeTabRelPath}
                       onOpenFile={openFile}
                       onOpenCompleteModal={(cat) => setCompleteModalCat(cat)}
+                      onCreateOutlineFromWorld={(worldRelPath) => void handleCreateOutlineFromWorld(worldRelPath)}
+                      onCreateProseFromOutline={(outlineRelPath) => handleCreateProseFromOutline(outlineRelPath)}
+                      onExportAssets={handleExportAssets}
                       onOpenNewFileModal={() => setNewFileModal(true)}
                       onOpenStoryBoard={() => setStoryBoardOpen(true)}
                     />
                   </Panel>
-                  <PanelResizeHandle className="h-1.5 bg-border/35 transition hover:bg-accent/40" />
-                  <Panel defaultSize={56} minSize={28}>
+                  <PanelResizeHandle className="h-1.5 cursor-row-resize bg-border/35 transition hover:bg-accent/40" />
+                  <Panel id="wb-comms" order={2} defaultSize={56} minSize={28}>
                     <AgentCommsBoard />
                   </Panel>
                 </PanelGroup>
               </aside>
             </Panel>
-            <PanelResizeHandle className="w-1.5 bg-transparent transition hover:bg-accent/30" />
+            <PanelResizeHandle
+              data-testid="wb-left-resize-handle"
+              className="w-1.5 cursor-col-resize bg-transparent transition hover:bg-accent/35"
+            />
           </>
         )}
 
-        <Panel defaultSize={focusMode ? 100 : 49} minSize={35}>
+        <Panel id="wb-editor" order={2} defaultSize={focusMode ? 100 : 49} minSize={35}>
           <OfficeEditor
             onSaveFile={handleSaveCurrent}
             onToggleLock={handleToggleLock}
@@ -722,6 +820,8 @@ export const Workbench: React.FC<WorkbenchProps> = ({
             onAcceptProposal={handleAcceptProposal}
             onRejectProposal={() => setPendingProposal(null)}
             onOpenAudition={() => setAuditionOpen(true)}
+            onCreateOutlineFromWorld={(rel) => void handleCreateOutlineFromWorld(rel)}
+            onCreateProseFromOutline={(rel) => handleCreateProseFromOutline(rel)}
             focusMode={focusMode}
             onToggleFocusMode={() => setFocusMode((f) => !f)}
           />
@@ -729,8 +829,8 @@ export const Workbench: React.FC<WorkbenchProps> = ({
 
         {!focusMode && (
           <>
-            <PanelResizeHandle className="w-1.5 bg-transparent transition hover:bg-accent/30" />
-            <Panel defaultSize={30} minSize={24} maxSize={42}>
+            <PanelResizeHandle className="w-1.5 cursor-col-resize bg-transparent transition hover:bg-accent/35" />
+            <Panel id="wb-chat" order={3} defaultSize={30} minSize={24} maxSize={42}>
               <AgentChatPanel
                 draftPrompt={draftPrompt}
                 setDraftPrompt={setDraftPrompt}
@@ -751,35 +851,48 @@ export const Workbench: React.FC<WorkbenchProps> = ({
         )}
       </PanelGroup>
 
-      {newFileModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-4 shadow-xl">
-            <h3 className="text-sm font-semibold text-text-primary">新建文件</h3>
-            <input
-              type="text"
-              value={newFileRelPath}
-              onChange={(e) => setNewFileRelPath(e.target.value)}
-              className="mt-3 w-full rounded-xl border border-border bg-surface-raised px-3 py-2 text-xs text-text-primary outline-none focus:border-accent"
-            />
-            <div className="mt-3 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setNewFileModal(false)}
-                className="rounded-lg border border-border px-3 py-1.5 text-xs text-text-secondary"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleCreateNewFile()}
-                className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-on-accent"
-              >
-                创建
-              </button>
+      {newFileModal &&
+        createPortal(
+          <div onClick={() => setNewFileModal(false)} className="no-drag fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4 backdrop-blur-xs">
+            <div onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-2xl border border-border bg-surface p-4 shadow-xl">
+              <h3 className="text-sm font-semibold text-text-primary">新建文件</h3>
+              <input
+                type="text"
+                value={newFileRelPath}
+                onChange={(e) => setNewFileRelPath(e.target.value)}
+                className="mt-3 w-full rounded-xl border border-border bg-surface-raised px-3 py-2 text-xs text-text-primary outline-none focus:border-accent"
+              />
+              <div className="mt-3 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setNewFileModal(false)}
+                  className="rounded-lg border border-border px-3 py-1.5 text-xs text-text-secondary"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleCreateNewFile()}
+                  className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-on-accent"
+                >
+                  创建
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
+
+      <CreateChaptersModal
+        open={outlineToProseRelPath !== null}
+        outlineRelPath={outlineToProseRelPath || '大纲/01_故事架构.md'}
+        onClose={() => setOutlineToProseRelPath(null)}
+        onConfirm={async (opts) => {
+          const targetRel = outlineToProseRelPath || '大纲/01_故事架构.md'
+          setOutlineToProseRelPath(null)
+          await handleCreateChaptersFromOutline({ outlineRelPath: targetRel, ...opts })
+        }}
+      />
 
       <AssetCompleteModal
         open={completeModalCat !== null}

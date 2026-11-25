@@ -22,9 +22,9 @@ export function isNewerSemver(latest: string, current: string): boolean {
 export class AppUpdaterService {
   getCurrentVersion(): string {
     try {
-      return app.getVersion() || '1.0.0'
+      return app.getVersion() || '1.0.2'
     } catch {
-      return '1.0.0'
+      return '1.0.2'
     }
   }
 

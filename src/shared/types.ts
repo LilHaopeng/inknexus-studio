@@ -190,6 +190,24 @@ export interface AgentBackendInfo {
   supportedReasoning: ReasoningLevel[]
   supportsStreamingThinking: boolean
   errorMessage?: string
+  customEnv?: Record<string, string>
+  customArgs?: string[]
+  source?: 'builtin' | 'custom-override'
+}
+
+export interface AgentBridgePaths {
+  readmePath: string
+  configPath: string
+  installDir: string
+}
+
+export interface RadarLiveFetchResult {
+  ok: boolean
+  source: 'builtin-browser-live' | 'login-required' | 'error'
+  url: string
+  extractedText: string
+  itemCount: number
+  message?: string
 }
 
 export interface ApiProviderPreset {

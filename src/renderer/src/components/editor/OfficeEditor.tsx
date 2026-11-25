@@ -57,6 +57,8 @@ interface OfficeEditorProps {
   onAcceptProposal: (finalText: string) => Promise<void>
   onRejectProposal: () => void
   onOpenAudition?: () => void
+  onCreateOutlineFromWorld?: (worldRelPath: string) => void
+  onCreateProseFromOutline?: (outlineRelPath: string) => void
   focusMode: boolean
   onToggleFocusMode: () => void
 }
@@ -71,6 +73,8 @@ export const OfficeEditor: React.FC<OfficeEditorProps> = ({
   onAcceptProposal,
   onRejectProposal,
   onOpenAudition,
+  onCreateOutlineFromWorld,
+  onCreateProseFromOutline,
   focusMode,
   onToggleFocusMode
 }) => {
@@ -101,6 +105,7 @@ export const OfficeEditor: React.FC<OfficeEditorProps> = ({
   const isSyncingRef = useRef(false)
   const activeTabRelRef = useRef(activeTabRelPath)
   activeTabRelRef.current = activeTabRelPath
+  const lastLoadedKeyRef = useRef('')
   const hiddenHeaderRef = useRef('')
   const cleanDisplayRef = useRef(cleanDisplay)
   cleanDisplayRef.current = cleanDisplay
@@ -157,9 +162,17 @@ export const OfficeEditor: React.FC<OfficeEditorProps> = ({
     }
   })
 
-  // Sync active tab content into Tiptap ONLY when switching tab, toggling clean mode, or applying external update
+  // Sync active tab content into Tiptap ONLY when switching tab, toggling clean mode, or applying external/saved update without stealing focus during auto-save
   useEffect(() => {
     if (!editor || !activeTab) return
+    const tabKey = `${activeTabRelPath ?? ''}::${cleanDisplay ? '1' : '0'}::${activeTab.locked ? 'L' : 'U'}`
+    const keyChanged = lastLoadedKeyRef.current !== tabKey
+    lastLoadedKeyRef.current = tabKey
+
+    if (!keyChanged && editor.isFocused) {
+      return
+    }
+
     isSyncingRef.current = true
     try {
       if (editor.isEditable !== !activeTab.locked) {
@@ -452,8 +465,44 @@ export const OfficeEditor: React.FC<OfficeEditorProps> = ({
           <span className="hidden 2xl:inline">{activeTab.locked ? '已锁正典' : '锁正典'}</span>
         </button>
 
-        <div className="ml-auto flex items-center gap-1">
-          <div className="flex rounded-lg border border-border bg-surface p-0.5 text-[11px]">
+        <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          {(() => {
+            const rel = activeTab.relPath || ''
+            const isWorldDoc = /^设定\//.test(rel) || /世界观/.test(rel)
+            const isOutlineDoc =
+              !isWorldDoc && (/^大纲\//.test(rel) || /大纲|故事DNA|脑洞|节拍|卡点|总案/i.test(rel))
+            if (isWorldDoc && onCreateOutlineFromWorld) {
+              return (
+                <button
+                  type="button"
+                  data-testid="editor-action-from-world"
+                  title="基于当前世界观创建大纲（与左侧栏右键一致）"
+                  onClick={() => onCreateOutlineFromWorld(rel)}
+                  className="inline-flex h-7 shrink-0 whitespace-nowrap items-center gap-1 rounded-lg border border-accent/40 bg-accent-soft/80 px-2.5 text-[11px] font-semibold text-accent transition hover:bg-accent hover:text-on-accent"
+                >
+                  <Sparkles className="h-3 w-3 shrink-0" />
+                  <span>生成大纲</span>
+                </button>
+              )
+            }
+            if (isOutlineDoc && onCreateProseFromOutline) {
+              return (
+                <button
+                  type="button"
+                  data-testid="editor-action-from-outline"
+                  title="基于当前大纲创建正文章节（与左侧栏右键一致）"
+                  onClick={() => onCreateProseFromOutline(rel)}
+                  className="inline-flex h-7 shrink-0 whitespace-nowrap items-center gap-1 rounded-lg border border-accent/40 bg-accent-soft/80 px-2.5 text-[11px] font-semibold text-accent transition hover:bg-accent hover:text-on-accent"
+                >
+                  <Sparkles className="h-3 w-3 shrink-0" />
+                  <span>生成正文</span>
+                </button>
+              )
+            }
+            return null
+          })()}
+
+          <div className="flex shrink-0 items-center rounded-lg border border-border bg-surface p-0.5 text-[11px]">
             {[
               { id: 'book' as const, label: '书籍', icon: BookOpen },
               { id: 'mobile' as const, label: '手机', icon: Smartphone },
@@ -466,11 +515,11 @@ export const OfficeEditor: React.FC<OfficeEditorProps> = ({
                   key={m.id}
                   type="button"
                   onClick={() => setViewMode(m.id)}
-                  className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 transition ${
+                  className={`inline-flex shrink-0 whitespace-nowrap items-center gap-1 rounded-md px-2 py-0.5 transition ${
                     viewMode === m.id ? 'bg-accent text-on-accent' : 'text-text-secondary hover:text-text-primary'
                   }`}
                 >
-                  <Icon className="h-3 w-3" />
+                  <Icon className="h-3 w-3 shrink-0" />
                   <span className="hidden sm:inline">{m.label}</span>
                 </button>
               )
@@ -481,11 +530,11 @@ export const OfficeEditor: React.FC<OfficeEditorProps> = ({
             type="button"
             title={cleanDisplay ? '已自动隐藏 L0/L1/Status 等 Agent 工程标记（点击显示）' : '当前显示全部原始标记（点击隐藏）'}
             onClick={() => setCleanDisplay((v) => !v)}
-            className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] border ${
+            className={`inline-flex h-7 shrink-0 whitespace-nowrap items-center gap-1 rounded-md px-2 py-1 text-[11px] border ${
               cleanDisplay ? 'border-accent/40 bg-accent-soft/60 text-accent' : 'border-border text-text-secondary'
             }`}
           >
-            {cleanDisplay ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+            {cleanDisplay ? <EyeOff className="h-3 w-3 shrink-0" /> : <Eye className="h-3 w-3 shrink-0" />}
             <span>{cleanDisplay ? '纯净' : '原标记'}</span>
           </button>
 
@@ -494,9 +543,9 @@ export const OfficeEditor: React.FC<OfficeEditorProps> = ({
               type="button"
               title="同题双模型试写分屏对比"
               onClick={onOpenAudition}
-              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-text-secondary hover:border-accent hover:text-accent"
+              className="inline-flex h-7 shrink-0 whitespace-nowrap items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-text-secondary hover:border-accent hover:text-accent"
             >
-              <SplitSquareHorizontal className="h-3 w-3" />
+              <SplitSquareHorizontal className="h-3 w-3 shrink-0" />
               <span className="hidden xl:inline">试写对比</span>
             </button>
           )}
@@ -510,7 +559,7 @@ export const OfficeEditor: React.FC<OfficeEditorProps> = ({
               })
               setConfig(updated)
             }}
-            className={`rounded-md px-2 py-1 text-[11px] border ${
+            className={`inline-flex h-7 shrink-0 whitespace-nowrap items-center rounded-md px-2 py-1 text-[11px] border ${
               isManuscript ? 'border-amber-500/50 bg-amber-500/10 text-amber-700' : 'border-border text-text-secondary'
             }`}
           >
@@ -521,9 +570,9 @@ export const OfficeEditor: React.FC<OfficeEditorProps> = ({
             type="button"
             title="保存当前文档 (Ctrl+S)"
             onClick={() => void onSaveFile()}
-            className="inline-flex h-7 items-center gap-1 rounded-md bg-accent px-2.5 text-xs font-medium text-on-accent hover:bg-accent-hover"
+            className="inline-flex h-7 shrink-0 whitespace-nowrap items-center gap-1 rounded-md bg-accent px-2.5 text-xs font-medium text-on-accent hover:bg-accent-hover"
           >
-            <Save className="h-3.5 w-3.5" />
+            <Save className="h-3.5 w-3.5 shrink-0" />
             <span>保存</span>
           </button>
         </div>
@@ -720,7 +769,7 @@ export const OfficeEditor: React.FC<OfficeEditorProps> = ({
           <span>全书 {(activeProject?.wordCount ?? 0).toLocaleString()} 字</span>
           <span>·</span>
           <span className={activeTab.dirty ? 'text-warning font-medium' : 'text-success'}>
-            {activeTab.dirty ? '● 有未保存修改' : '✓ 已保存'}
+            {activeTab.dirty ? '● 自动保存中...' : '✓ 已自动保存'}
           </span>
         </div>
 

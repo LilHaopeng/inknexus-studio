@@ -61,6 +61,7 @@ describe('Custom Aurora installer helpers & user agreement', () => {
       const asarContent = Buffer.from('ASAR_BINARY_HEADER_PAYLOAD_TEST_BYTES_123456')
       fs.writeFileSync(path.join(payloadDir, '墨枢 InkNexus Studio.exe'), 'exe-bytes', 'utf8')
       fs.writeFileSync(path.join(payloadDir, 'resources', 'app.asar'), asarContent)
+      fs.writeFileSync(path.join(payloadDir, 'resources', 'AGENT_BRIDGE_README.md'), '# Bridge Guide', 'utf8')
 
       const res = await performInstall({
         payloadDir,
@@ -69,13 +70,39 @@ describe('Custom Aurora installer helpers & user agreement', () => {
         createStartMenuShortcut: false,
         launchOnStartup: false,
         skipSystemRegistration: true,
-        appVersion: '1.0.1'
+        appVersion: '1.0.2'
       })
 
       expect(res.installDir).toBe(path.resolve(installDir))
       expect(fs.existsSync(path.join(installDir, 'resources', 'app.asar'))).toBe(true)
       expect(fs.readFileSync(path.join(installDir, 'resources', 'app.asar')).equals(asarContent)).toBe(true)
+      expect(fs.existsSync(path.join(installDir, 'AGENT_BRIDGE_README.md'))).toBe(true)
+      expect(fs.existsSync(path.join(installDir, 'Contents', '未分类'))).toBe(true)
       expect(fs.existsSync(path.join(installDir, 'uninstall.cmd'))).toBe(false)
+    } finally {
+      fs.rmSync(payloadDir, { recursive: true, force: true })
+      fs.rmSync(installDir, { recursive: true, force: true })
+    }
+  })
+
+  it('writes safe uninstaller that preserves Contents user works directory', async () => {
+    const payloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'inknexus-payload-u-'))
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'inknexus-dest-u-'))
+    try {
+      fs.mkdirSync(path.join(payloadDir, 'resources'), { recursive: true })
+      fs.writeFileSync(path.join(payloadDir, '墨枢 InkNexus Studio.exe'), 'exe', 'utf8')
+      fs.writeFileSync(path.join(payloadDir, 'resources', 'app.asar'), 'asar', 'utf8')
+      await performInstall({
+        payloadDir,
+        installDir,
+        createDesktopShortcut: false,
+        createStartMenuShortcut: false,
+        launchOnStartup: false,
+        appVersion: '1.0.2'
+      })
+      const uninst = fs.readFileSync(path.join(installDir, 'uninstall.cmd'), 'utf8')
+      expect(uninst).toContain('已安全保留 Contents 目录')
+      expect(uninst).not.toContain(`rmdir /s /q ""${path.resolve(installDir)}"""`)
     } finally {
       fs.rmSync(payloadDir, { recursive: true, force: true })
       fs.rmSync(installDir, { recursive: true, force: true })

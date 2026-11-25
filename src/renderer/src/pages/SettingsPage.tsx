@@ -17,9 +17,11 @@ import {
   AlertTriangle,
   BookOpenCheck,
   CheckCircle2,
+  Copy,
   Cpu,
   Download,
   ExternalLink,
+  FileText,
   FolderOpen,
   Github,
   HardDrive,
@@ -243,6 +245,7 @@ export const SettingsPage: React.FC<{ initialTab?: SettingsTab }> = ({ initialTa
   const [updateProgress, setUpdateProgress] = useState<{ percent: number; label: string } | null>(null)
   const [licenseText, setLicenseText] = useState('')
   const [skillBusyId, setSkillBusyId] = useState<SkillId | null>(null)
+  const [bridgePaths, setBridgePaths] = useState<{ readmePath: string; configPath: string; installDir: string } | null>(null)
 
   useEffect(() => {
     setTab(initialTab)
@@ -261,8 +264,10 @@ export const SettingsPage: React.FC<{ initialTab?: SettingsTab }> = ({ initialTa
       void window.inknexus.storage.getLicenses().then(setLicenseText)
     } else if (tab === 'skills' && skillRegistry.length === 0) {
       void window.inknexus.skills.registry().then(setSkillRegistry)
+    } else if (tab === 'agents' && !bridgePaths) {
+      void window.inknexus.agents.getBridgePaths().then(setBridgePaths)
     }
-  }, [tab, licenseText, skillRegistry.length, setSkillRegistry])
+  }, [tab, licenseText, skillRegistry.length, setSkillRegistry, bridgePaths])
 
   useEffect(() => {
     const unsub = window.inknexus.updater.onProgress((ev) => setUpdateProgress(ev))
@@ -536,6 +541,58 @@ export const SettingsPage: React.FC<{ initialTab?: SettingsTab }> = ({ initialTa
                   重新探测本机 CLI
                 </button>
               </div>
+
+              {(() => {
+                const readmePath = bridgePaths?.readmePath || 'AGENT_BRIDGE_README.md'
+                const cfgPath = bridgePaths?.configPath || '%APPDATA%\\InkNexusStudio\\custom-agents.json'
+                const repairPrompt = [
+                  `请帮我将你（以及本机安装的 DSH / WorkBuddy / Qoder / 其他 CLI）正确接入到「墨枢 InkNexus Studio」并刷新出你最新的可用模型列表：`,
+                  `1. 请先阅读安装目录下的对接说明书：${readmePath}`,
+                  `2. 请实测你本机真实可执行文件路径、启动所需环境变量，并在你当前有效环境下运行命令获取你最新的可用模型 ID 列表；`,
+                  `3. 请按照说明书里的 JSON 格式写入（或更新）桥接配置文件：${cfgPath}；`,
+                  `4. 完成后告诉我，我会在软件里点击「重新探测本机 CLI」立即生效。`
+                ].join('\n')
+                return (
+                  <div
+                    data-testid="agent-repair-prompt-card"
+                    className="glass-card space-y-2.5 border-accent/35 bg-accent-soft/25 p-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-text-primary">
+                        如果无法成功探测或模型未更新，请将以下提示词复制到对应的 Agent 里修复：
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (bridgePaths?.readmePath) {
+                              void window.inknexus.projects.openFolder(bridgePaths.installDir)
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 rounded-lg border border-border bg-surface px-2.5 py-1 text-[11px] text-text-secondary hover:border-accent hover:text-accent"
+                        >
+                          <FileText className="h-3 w-3" />
+                          查看说明目录
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(repairPrompt)
+                            toast.success('已复制外部 Agent 对接与模型修复提示词')
+                          }}
+                          className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1 text-[11px] font-medium text-on-accent hover:bg-accent-hover"
+                        >
+                          <Copy className="h-3 w-3" />
+                          一键复制提示词
+                        </button>
+                      </div>
+                    </div>
+                    <pre className="whitespace-pre-wrap rounded-xl border border-border/70 bg-surface/85 p-3 font-mono text-[11px] leading-relaxed text-text-secondary select-all">
+                      {repairPrompt}
+                    </pre>
+                  </div>
+                )
+              })()}
 
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 {localAgents.map((agent) => (
@@ -928,34 +985,54 @@ export const SettingsPage: React.FC<{ initialTab?: SettingsTab }> = ({ initialTa
                   </button>
                 </div>
 
-                {updateInfo && (
-                  <div className="rounded-xl border border-border bg-surface p-4 text-xs space-y-2">
-                    <div className="flex items-center gap-2 font-semibold text-text-primary">
-                      <CheckCircle2 className="h-4 w-4 text-accent" />
-                      <span>
-                        当前版本 v{updateInfo.currentVersion} · 最新 Release v{updateInfo.latestVersion}
-                      </span>
+                {(() => {
+                  const shownUpdate = updateInfo ?? useStudioStore.getState().startupAppUpdate
+                  if (!shownUpdate) return null
+                  return (
+                    <div className="rounded-xl border border-border bg-surface p-4 text-xs space-y-3">
+                      <div className="flex items-center justify-between gap-2 font-semibold text-text-primary">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className="h-4 w-4 text-accent" />
+                          <span>
+                            当前版本 v{shownUpdate.currentVersion} · 最新 Release v{shownUpdate.latestVersion}
+                          </span>
+                        </div>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                            shownUpdate.hasUpdate
+                              ? 'bg-accent-soft text-accent'
+                              : 'bg-success-soft text-success'
+                          }`}
+                        >
+                          {shownUpdate.hasUpdate ? '发现可更新版本' : '已是最新版本'}
+                        </span>
+                      </div>
+
+                      {shownUpdate.releaseNotes && (
+                        <div className="space-y-1.5 rounded-xl border border-border/70 bg-surface-raised/60 p-3">
+                          <div className="text-[11px] font-semibold text-text-primary">更新日志</div>
+                          <CleanLicenseDocument raw={shownUpdate.releaseNotes} />
+                        </div>
+                      )}
+
+                      {shownUpdate.hasUpdate && shownUpdate.downloadUrl && shownUpdate.assetName && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void window.inknexus.updater.downloadAndInstall(
+                              shownUpdate.downloadUrl!,
+                              shownUpdate.assetName!
+                            )
+                          }
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-4 py-1.5 text-xs font-medium text-on-accent hover:bg-accent-hover"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          下载并安装 {shownUpdate.assetName}
+                        </button>
+                      )}
                     </div>
-                    <p className="text-text-secondary">
-                      {updateInfo.hasUpdate ? updateInfo.releaseNotes || '检测到新版本可下载更新' : '当前已是最新版本'}
-                    </p>
-                    {updateInfo.hasUpdate && updateInfo.downloadUrl && updateInfo.assetName && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void window.inknexus.updater.downloadAndInstall(
-                            updateInfo.downloadUrl!,
-                            updateInfo.assetName!
-                          )
-                        }
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-4 py-1.5 text-xs font-medium text-on-accent"
-                      >
-                        <Download className="h-3.5 w-3.5" />
-                        下载并安装 {updateInfo.assetName}
-                      </button>
-                    )}
-                  </div>
-                )}
+                  )
+                })()}
 
                 {updateProgress && (
                   <div className="space-y-1 text-xs">

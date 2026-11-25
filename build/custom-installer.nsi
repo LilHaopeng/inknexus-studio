@@ -2,17 +2,17 @@
 SilentInstall silent
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
-Name "墨枢 InkNexus Studio 1.0.1"
-Caption "墨枢 InkNexus Studio 1.0.1 安装程序"
+Name "墨枢 InkNexus Studio 1.0.2"
+Caption "墨枢 InkNexus Studio 1.0.2 安装程序"
 Icon "icon.ico"
-OutFile "..\dist\墨枢 InkNexus Studio Setup 1.0.1.exe"
+OutFile "..\dist\墨枢 InkNexus Studio Setup 1.0.2.exe"
 
-VIProductVersion "1.0.1.0"
+VIProductVersion "1.0.2.0"
 VIAddVersionKey "ProductName" "墨枢 InkNexus Studio"
 VIAddVersionKey "CompanyName" "LilHaopeng"
 VIAddVersionKey "FileDescription" "墨枢 InkNexus Studio 安装程序"
-VIAddVersionKey "FileVersion" "1.0.1.0"
-VIAddVersionKey "ProductVersion" "1.0.1"
+VIAddVersionKey "FileVersion" "1.0.2.0"
+VIAddVersionKey "ProductVersion" "1.0.2"
 VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 LilHaopeng (MIT License)"
 
 !include "FileFunc.nsh"

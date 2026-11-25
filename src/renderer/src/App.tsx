@@ -14,7 +14,7 @@ import { SettingsPage, type SettingsTab } from './pages/SettingsPage'
 import { CloseConfirmModal } from './components/ui/CloseConfirmModal'
 import { CommandPalette } from './components/ui/CommandPalette'
 import { ExportModal } from './components/editor/ExportModal'
-import { BookOpen, Download, FolderOpen, Search, Sparkles } from 'lucide-react'
+import { BookOpen, Download, FolderOpen, RefreshCw, Search, Sparkles, X } from 'lucide-react'
 
 export const App: React.FC = () => {
   const {
@@ -40,6 +40,12 @@ export const App: React.FC = () => {
     setReviewHistory,
     setSkillRegistry,
     setAppInfo,
+    setAgentsDiscovered,
+    startupAppUpdate,
+    startupUpdatableSkills,
+    updateBannerDismissed,
+    setStartupUpdateInfo,
+    dismissUpdateBanner,
     activeWorks
   } = useStudioStore()
 
@@ -119,32 +125,88 @@ export const App: React.FC = () => {
       setSwarmJobs(jobs)
       setSkillRegistry(skills)
       setAppInfo(info)
-    }
-    const discoverBackground = async () => {
+
       const locals = await window.inknexus.agents.discover()
       setLocalAgents(locals)
-      const first = locals.find((a) => a.status === 'available')
-      if (first) {
-        const cfg = useStudioStore.getState().config
+
+      const availableLocals = locals.filter((a) => a.status === 'available')
+      const readyApis = apis.filter((a: { hasApiKey?: boolean; enabled?: boolean }) => a.hasApiKey && a.enabled)
+      const savedLocal = availableLocals.find((a) => a.id === cfg.defaultAgentId)
+      const savedApi = readyApis.find((a: { presetId: string }) => a.presetId === cfg.defaultAgentId)
+
+      if (savedLocal) {
+        const defaultM = parseModelEffortVariant(savedLocal.models[0] || '').baseId
+        const validSaved =
+          cfg.defaultModel && savedLocal.models.some((m) => parseModelEffortVariant(m).baseId === cfg.defaultModel)
         useStudioStore.getState().setAgentSelection({
-          backendId: first.id,
-          model: parseModelEffortVariant(first.models[0] || '').baseId,
-          reasoning: cfg?.defaultReasoning ?? 'high'
+          backendId: savedLocal.id,
+          model: validSaved ? cfg.defaultModel : defaultM,
+          reasoning: cfg.defaultReasoning ?? 'high'
+        })
+      } else if (savedApi) {
+        useStudioStore.getState().setAgentSelection({
+          backendId: savedApi.presetId,
+          model: savedApi.models.includes(cfg.defaultModel) ? cfg.defaultModel : savedApi.models[0] || '',
+          reasoning: cfg.defaultReasoning ?? 'high'
+        })
+      } else if (availableLocals[0]) {
+        useStudioStore.getState().setAgentSelection({
+          backendId: availableLocals[0].id,
+          model: parseModelEffortVariant(availableLocals[0].models[0] || '').baseId,
+          reasoning: cfg.defaultReasoning ?? 'high'
+        })
+      } else if (readyApis[0]) {
+        useStudioStore.getState().setAgentSelection({
+          backendId: readyApis[0].presetId,
+          model: readyApis[0].models[0] || '',
+          reasoning: cfg.defaultReasoning ?? 'high'
+        })
+      } else {
+        useStudioStore.getState().setAgentSelection({
+          backendId: '',
+          model: '',
+          reasoning: cfg.defaultReasoning ?? 'high'
         })
       }
+      setAgentsDiscovered(true)
     }
+
+    const silentStartupUpdateCheck = async () => {
+      try {
+        const [appUpdRes, skillCheckRes] = await Promise.allSettled([
+          window.inknexus.updater.check(),
+          window.inknexus.skills.checkAllUpdates()
+        ])
+        const appUpd = appUpdRes.status === 'fulfilled' && appUpdRes.value.hasUpdate ? appUpdRes.value : null
+        const allSkills = skillCheckRes.status === 'fulfilled' ? skillCheckRes.value : []
+        if (allSkills.length > 0) {
+          setSkillRegistry(allSkills)
+        }
+        const updatableSkills = allSkills.filter((s) => s.hasUpdate)
+        if (appUpd || updatableSkills.length > 0) {
+          setStartupUpdateInfo(appUpd, updatableSkills)
+        }
+      } catch {
+        // Silent background check never alerts on network offline
+      }
+    }
+
     void bootFast()
-    void discoverBackground()
+    const updateTimer = setTimeout(() => {
+      void silentStartupUpdateCheck()
+    }, 2200)
 
     const unsubSwarm = window.inknexus.swarm.onUpdate((jobs) => setSwarmJobs(jobs))
     const unsubExt = window.inknexus.projects.onExternalChange(({ relPath }) => setExternalChangedRelPath(relPath))
     const unsubClose = window.inknexus.window.onCloseRequested(() => setCloseModalOpen(true))
     return () => {
+      clearTimeout(updateTimer)
       unsubSwarm()
       unsubExt()
       unsubClose()
     }
   }, [
+    setAgentsDiscovered,
     setApiConfigs,
     setAppInfo,
     setConfig,
@@ -152,6 +214,7 @@ export const App: React.FC = () => {
     setLocalAgents,
     setProjects,
     setSkillRegistry,
+    setStartupUpdateInfo,
     setSwarmJobs
   ])
 
@@ -183,7 +246,100 @@ export const App: React.FC = () => {
   useEffect(() => {
     window.__inknexusSmoke = async (scene: string) => {
       const store = useStudioStore.getState()
-      if (scene === 'home-light' || scene === 'home-dark') {
+      if (scene === 'simulate-no-cli') {
+        store.setLocalAgents(store.localAgents.map((a) => ({ ...a, status: 'not-installed' })))
+        store.setApiConfigs(store.apiConfigs.map((a) => ({ ...a, enabled: false, hasApiKey: false })))
+        store.setAgentSelection({ backendId: '', model: '', reasoning: 'high' })
+        store.setAgentsDiscovered(true)
+        store.setPage('home')
+        await new Promise((r) => setTimeout(r, 120))
+        return document.querySelector('[data-testid="titlebar-connection-pill"]')?.textContent?.trim() || ''
+      } else if (scene === 'open-version-drawer') {
+        store.setPage('workbench')
+        setVersionDrawerOpen(true)
+        return true
+      } else if (scene === 'open-world-context') {
+        store.setPage('workbench')
+        await new Promise((r) => setTimeout(r, 80))
+        const el = document.querySelector('[data-testid="asset-category-world"]')
+        if (el) {
+          const r = el.getBoundingClientRect()
+          el.dispatchEvent(
+            new MouseEvent('contextmenu', {
+              bubbles: true,
+              cancelable: true,
+              clientX: Math.round(r.left + r.width / 2),
+              clientY: Math.round(r.top + r.height / 2)
+            })
+          )
+        }
+        return true
+      } else if (scene === 'open-world-doc') {
+        const findWorld = (nodes: Awaited<ReturnType<typeof window.inknexus.projects.assets>>): string | undefined => {
+          for (const n of nodes) {
+            if (!n.isDirectory && (/^设定\//.test(n.relPath) || /^世界观\//.test(n.relPath) || n.category === 'world' || /世界观|设定/.test(n.relPath))) {
+              return n.relPath
+            }
+            if (n.isDirectory && n.children) {
+              const sub = findWorld(n.children)
+              if (sub) return sub
+            }
+          }
+          return undefined
+        }
+        let targetProj = store.projects[0]
+        let worldRel: string | undefined
+        for (const p of store.projects) {
+          const assets = await window.inknexus.projects.assets(p.rootPath)
+          const found = findWorld(assets)
+          if (found) {
+            targetProj = p
+            worldRel = found
+            break
+          }
+        }
+        if (targetProj && worldRel) {
+          await launchProject({ projectRoot: targetProj.rootPath, entryRelPath: worldRel })
+        } else {
+          store.setPage('workbench')
+          store.openOrFocusTab({
+            relPath: '设定/00_世界观总览.md',
+            name: '00_世界观总览',
+            content: '# 世界观总览\n\n## 核心法则\n灵潮每十二个时辰涨落一次，潮落时凡铁重若玄石，潮涨时符箓自燃。\n',
+            savedContent: '# 世界观总览\n\n## 核心法则\n灵潮每十二个时辰涨落一次，潮落时凡铁重若玄石，潮涨时符箓自燃。\n',
+            locked: false,
+            dirty: false
+          })
+        }
+        await new Promise((r) => setTimeout(r, 250))
+        return Boolean(document.querySelector('[data-testid="editor-action-from-world"]'))
+      } else if (scene === 'simulate-update-banner') {
+        store.setStartupUpdateInfo(
+          {
+            currentVersion: '1.0.2',
+            latestVersion: '1.0.3',
+            hasUpdate: true,
+            releaseNotes: '- 新增工作区默认 Contents 目录隔离\n- 支持作品资产分组与 Ctrl 多选导出 Docx\n- 工具栏增加世界观生成大纲/大纲生成正文快捷入口',
+            releaseUrl: 'https://github.com/LilHaopeng/inknexus-studio/releases',
+            checkedAt: Date.now()
+          },
+          [
+            {
+              id: 'story-world-architect',
+              name: '小说世界观架构师',
+              repoOwner: 'LilHaopeng',
+              repoName: 'story-world-architect',
+              repoUrl: 'https://github.com/LilHaopeng/story-world-architect',
+              localVersion: '1.0.0',
+              remoteVersion: '1.0.1',
+              hasUpdate: true,
+              summary: '世界观架构',
+              scripts: []
+            }
+          ]
+        )
+        return true
+      } else if (scene === 'home-light' || scene === 'home-dark') {
         const updated = await window.inknexus.config.save({
           theme: scene === 'home-dark' ? 'aurora-dark' : 'aurora-light'
         })
@@ -529,6 +685,80 @@ export const App: React.FC = () => {
         onClose={() => setShelfExportProject(null)}
         project={shelfExportProject}
       />
+
+      {/* 右下角启动静默更新发现提醒（软件新版 / Skill 新版） */}
+      {!updateBannerDismissed && (startupAppUpdate?.hasUpdate || startupUpdatableSkills.length > 0) && (
+        <div
+          data-testid="startup-update-banner"
+          className="glass-panel fixed right-5 bottom-5 z-40 w-[330px] border border-accent/40 bg-surface-raised/95 p-3.5 shadow-2xl"
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-semibold text-text-primary">
+              <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-accent-soft text-accent">
+                <RefreshCw className="h-3.5 w-3.5" />
+              </span>
+              <span>发现可用更新</span>
+            </div>
+            <button
+              type="button"
+              onClick={dismissUpdateBanner}
+              className="rounded-md p-1 text-text-muted hover:bg-surface hover:text-text-primary"
+              aria-label="关闭更新提示"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          <div className="mt-2 space-y-1.5 text-[11px] text-text-secondary">
+            {startupAppUpdate?.hasUpdate && (
+              <div>
+                软件发现新版本：<strong className="text-accent">v{startupAppUpdate.latestVersion}</strong>
+              </div>
+            )}
+            {startupAppUpdate?.hasUpdate && startupAppUpdate.releaseNotes && (
+              <div className="max-h-24 overflow-y-auto rounded-lg border border-border/60 bg-surface px-2.5 py-1.5 text-[10px] leading-relaxed text-text-secondary whitespace-pre-wrap">
+                {startupAppUpdate.releaseNotes
+                  .replace(/^#{1,6}\s+/gm, '')
+                  .replace(/\*\*/g, '')
+                  .replace(/`/g, '')
+                  .trim()}
+              </div>
+            )}
+            {startupUpdatableSkills.length > 0 && (
+              <div>
+                发现 <strong className="text-accent">{startupUpdatableSkills.length}</strong> 个内置创作 Skill 可更新
+              </div>
+            )}
+          </div>
+
+          <div className="mt-3 flex flex-wrap justify-end gap-2">
+            {startupUpdatableSkills.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSettingsTab('skills')
+                  setPage('settings')
+                }}
+                className="rounded-lg border border-accent/40 bg-accent-soft/60 px-2.5 py-1 text-[11px] font-medium text-accent hover:bg-accent hover:text-on-accent"
+              >
+                前往更新 Skill
+              </button>
+            )}
+            {startupAppUpdate?.hasUpdate && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSettingsTab('updater')
+                  setPage('settings')
+                }}
+                className="rounded-lg bg-accent px-3 py-1 text-[11px] font-medium text-on-accent hover:bg-accent-hover"
+              >
+                立即更新软件
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

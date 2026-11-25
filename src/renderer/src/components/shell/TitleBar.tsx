@@ -15,6 +15,7 @@ import {
   X
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { parseModelEffortVariant } from '@shared/model-families'
 import { useStudioStore } from '../../store/useStudioStore'
 
 interface TitleBarProps {
@@ -46,6 +47,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenExport, onOpenVersions
     setPage,
     agentSelection,
     setAgentSelection,
+    agentsDiscovered,
     localAgents,
     setLocalAgents,
     apiConfigs
@@ -87,12 +89,13 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenExport, onOpenVersions
     setConfig(updated)
   }
 
-  const activeLocal = localAgents.find((a) => a.id === agentSelection.backendId)
-  const activeApi = apiConfigs.find((a) => a.presetId === agentSelection.backendId)
-  const activeEngineLabel = activeLocal?.name ?? activeApi?.name ?? agentSelection.backendId
-
   const availableLocals = localAgents.filter((a) => a.status === 'available')
   const configuredApis = apiConfigs.filter((a) => a.hasApiKey || a.enabled)
+
+  const activeLocal = availableLocals.find((a) => a.id === agentSelection.backendId)
+  const activeApi = configuredApis.find((a) => a.presetId === agentSelection.backendId)
+  const isConnected = Boolean(activeLocal || activeApi)
+  const activeEngineLabel = activeLocal?.name ?? activeApi?.name ?? ''
 
   return (
     <header className="drag-region relative z-30 flex h-12 shrink-0 items-center justify-between border-b border-border/70 bg-surface/85 px-4 backdrop-blur-md">
@@ -117,12 +120,25 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenExport, onOpenVersions
         <div className="no-drag relative" ref={popoverRef}>
           <button
             type="button"
+            data-testid="titlebar-connection-pill"
             onClick={() => setConnOpen((o) => !o)}
             className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-raised/90 px-3 py-1 text-xs text-text-secondary transition hover:border-accent/50 hover:text-text-primary"
           >
-            <span className="h-2 w-2 rounded-full bg-success" />
-            <span>本地工作空间已连接 ·</span>
-            <strong className="font-medium text-text-primary">{activeEngineLabel}</strong>
+            <span
+              className={`h-2 w-2 rounded-full ${
+                !agentsDiscovered ? 'bg-text-muted animate-pulse' : isConnected ? 'bg-success' : 'bg-warning'
+              }`}
+            />
+            {!agentsDiscovered ? (
+              <span>正在探测本地引擎...</span>
+            ) : isConnected ? (
+              <>
+                <span>本地工作空间已连接 ·</span>
+                <strong className="font-medium text-text-primary">{activeEngineLabel}</strong>
+              </>
+            ) : (
+              <span className="font-medium text-warning">未连接 AI 引擎 · 点击配置</span>
+            )}
             <ChevronDown className="h-3.5 w-3.5 text-text-muted" />
           </button>
 
@@ -152,7 +168,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenExport, onOpenVersions
                   <div className="mb-1.5 text-[11px] font-medium text-text-muted">已检测到本地 CLI（{availableLocals.length}）</div>
                   {availableLocals.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-border p-2.5 text-[11px] text-text-muted">
-                      未检测到可用的本地 CLI，请安装或在设置中配置 API 供应商。
+                      未检测到可用的本地 CLI，请安装或在设置中查看外部 Agent 自动对接说明。
                     </div>
                   ) : (
                     <div className="grid grid-cols-2 gap-1.5">
@@ -163,11 +179,13 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenExport, onOpenVersions
                             key={a.id}
                             type="button"
                             onClick={() => {
+                              const nextModel = parseModelEffortVariant(a.models[0] || '').baseId
                               setAgentSelection({
                                 backendId: a.id,
-                                model: a.models[0] || '',
+                                model: nextModel,
                                 reasoning: agentSelection.reasoning
                               })
+                              void window.inknexus.config.save({ defaultAgentId: a.id, defaultModel: nextModel })
                               toast.success(`已切换主控引擎至 ${a.name}`)
                               setConnOpen(false)
                             }}
@@ -207,11 +225,13 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenExport, onOpenVersions
                             key={api.presetId}
                             type="button"
                             onClick={() => {
+                              const nextModel = parseModelEffortVariant(api.models[0] || '').baseId
                               setAgentSelection({
                                 backendId: api.presetId,
-                                model: api.models[0] || '',
+                                model: nextModel,
                                 reasoning: agentSelection.reasoning
                               })
+                              void window.inknexus.config.save({ defaultAgentId: api.presetId, defaultModel: nextModel })
                               toast.success(`已切换主控引擎至 ${api.name}`)
                               setConnOpen(false)
                             }}

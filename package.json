@@ -1,6 +1,6 @@
 {
   "name": "inknexus-studio",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "墨枢 InkNexus Studio — Desktop AI Novel & Script Co-Creation Workbench",
   "main": "./out/main/index.js",
   "author": "LilHaopeng",

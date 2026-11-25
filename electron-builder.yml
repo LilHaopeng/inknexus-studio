@@ -14,6 +14,8 @@ extraResources:
     to: skills
   - from: THIRD_PARTY_LICENSES.md
     to: THIRD_PARTY_LICENSES.md
+  - from: AGENT_BRIDGE_README.md
+    to: AGENT_BRIDGE_README.md
   - from: build/icon.ico
     to: icon.ico
   - from: build/icon.png

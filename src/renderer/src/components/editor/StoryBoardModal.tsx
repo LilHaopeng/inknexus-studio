@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Bookmark, Users, X } from 'lucide-react'
 import { stripAgentMarkupForDisplay } from '@shared/agent-markup-filter'
 import { useStudioStore } from '../../store/useStudioStore'
@@ -48,9 +49,9 @@ export const StoryBoardModal: React.FC<StoryBoardModalProps> = ({ open, onClose 
 
   if (!open || !activeProject) return null
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
-      <div className="flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">
+  return createPortal(
+    <div onClick={onClose} className="no-drag fixed inset-0 z-[80] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
+      <div onClick={(e) => e.stopPropagation()} className="flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">
         <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
           <h3 className="text-base font-semibold text-text-primary">《{activeProject.title}》人物与伏笔状态看板</h3>
           <button type="button" onClick={onClose} className="rounded-lg p-1 text-text-muted hover:bg-surface-raised">
@@ -79,6 +80,7 @@ export const StoryBoardModal: React.FC<StoryBoardModalProps> = ({ open, onClose 
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

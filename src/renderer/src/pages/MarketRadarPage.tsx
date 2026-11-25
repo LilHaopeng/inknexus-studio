@@ -2,8 +2,10 @@ import React, { useEffect, useMemo, useState } from 'react'
 import {
   ArrowRight,
   CheckSquare,
+  ExternalLink,
   FolderOpen,
   GitCompare,
+  Globe,
   Loader2,
   Radar,
   Sparkles,
@@ -89,6 +91,8 @@ export const MarketRadarPage: React.FC<MarketRadarPageProps> = ({ onLaunchFromTo
   const [track, setTrack] = useState<'short' | 'long' | 'ai-drama'>('short')
   const [notes, setNotes] = useState('')
   const [scanning, setScanning] = useState(false)
+  const [capturingLive, setCapturingLive] = useState(false)
+  const [liveStatus, setLiveStatus] = useState<string>('')
   const [comparing, setComparing] = useState(false)
   const [activeTrend, setActiveTrend] = useState<RadarTrendAnalysis | null>(null)
   const [creatingFromBrief, setCreatingFromBrief] = useState(false)
@@ -121,8 +125,16 @@ export const MarketRadarPage: React.FC<MarketRadarPageProps> = ({ onLaunchFromTo
         platform,
         track,
         notes,
-        selection: agentSelection
+        selection: agentSelection,
+        useBuiltinBrowser: true
       })
+      if (res.liveMeta) {
+        setLiveStatus(
+          res.liveMeta.ok
+            ? `已自动通过内置浏览器实时抓取 ${res.liveMeta.itemCount} 条榜单信息`
+            : res.liveMeta.message || '未抓取到公开页数据，已回退内置基线分析'
+        )
+      }
       toast.success(`扫榜完成：${res.created.folderName}`)
       setReports(res.reports)
       setActiveReportId(res.created.folderName)
@@ -130,6 +142,28 @@ export const MarketRadarPage: React.FC<MarketRadarPageProps> = ({ onLaunchFromTo
       toast.error(`扫榜失败：${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setScanning(false)
+    }
+  }
+
+  const handleOpenBuiltinBrowser = async () => {
+    const res = await window.inknexus.radar.openBrowser(platform)
+    setLiveStatus(`已打开内置榜单窗口（${res.url}），如目标站点需要登录请在窗口内完成后点击「抓取窗口榜单」`)
+  }
+
+  const handleCaptureBuiltinWindow = async () => {
+    setCapturingLive(true)
+    try {
+      const res = await window.inknexus.radar.captureBrowser()
+      if (res.ok && res.extractedText) {
+        setNotes((prev) => `${prev ? prev + '\n\n' : ''}${res.extractedText.slice(0, 4500)}`)
+        setLiveStatus(res.message || `已提取 ${res.itemCount} 条实时文本`)
+        toast.success(`已从内置浏览器窗口抓取 ${res.itemCount} 条榜单内容，可直接点击「一键扫榜」`)
+      } else {
+        setLiveStatus(res.message || '未提取到内容')
+        toast.info(res.message || '请先在内置榜单窗口加载页面')
+      }
+    } finally {
+      setCapturingLive(false)
     }
   }
 
@@ -163,12 +197,12 @@ export const MarketRadarPage: React.FC<MarketRadarPageProps> = ({ onLaunchFromTo
   const handleLaunchTopic = async (briefText: string, titleHint: string, targetMode: CreationMode) => {
     setCreatingFromBrief(true)
     try {
-      const root = config?.workspaceRoot || 'c:\\Dbackup\\AI小说'
+      const root = config?.workspaceRoot || undefined
       const safeTitle = titleHint.replace(/[<>:"/\\|?*]/g, '_').slice(0, 26) || `新选题_${Date.now()}`
       const proj = await window.inknexus.projects.create({
         title: safeTitle,
         mode: targetMode,
-        parentDir: root
+        ...(root ? { parentDir: root } : {})
       })
       const prePrompt = await window.inknexus.prompt.composeScratch({
         mode: targetMode,
@@ -268,6 +302,30 @@ export const MarketRadarPage: React.FC<MarketRadarPageProps> = ({ onLaunchFromTo
                 {scanning ? '扫榜分析中...' : '一键扫榜'}
               </button>
             </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-3 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleOpenBuiltinBrowser()}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-surface-raised px-3 py-1.5 text-xs font-medium text-text-primary transition hover:border-accent hover:text-accent"
+              >
+                <Globe className="h-3.5 w-3.5 text-accent" />
+                打开内置榜单窗口（免 Ego 浏览器）
+                <ExternalLink className="h-3 w-3 text-text-muted" />
+              </button>
+              <button
+                type="button"
+                disabled={capturingLive}
+                onClick={() => void handleCaptureBuiltinWindow()}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-accent/40 bg-accent-soft/60 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent hover:text-on-accent disabled:opacity-50"
+              >
+                {capturingLive ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                抓取窗口榜单
+              </button>
+            </div>
+            {liveStatus && <span className="text-[11px] text-text-secondary">{liveStatus}</span>}
           </div>
         </div>
 

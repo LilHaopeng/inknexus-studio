@@ -1,6 +1,7 @@
 import { spawn } from 'child_process'
 import type { AgentBackendInfo } from '@shared/types'
 import { resolveExecutableModelId } from '@shared/model-families'
+import { resolveNodeForScript } from './discovery'
 import { mapReasoningLevel } from './reasoning-map'
 import type { AgentExecutionRequest, AgentExecutionResult } from './types'
 
@@ -13,6 +14,19 @@ function sanitizeProxyEnvForDsh(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     }
   }
   return env
+}
+
+function applyCustomEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  customEnv?: Record<string, string | undefined>
+): NodeJS.ProcessEnv {
+  if (!customEnv) return baseEnv
+  const next = { ...baseEnv }
+  for (const [k, v] of Object.entries(customEnv)) {
+    if (!v) delete next[k]
+    else next[k] = v
+  }
+  return next
 }
 
 export class CliSubprocessRunner {
@@ -30,9 +44,30 @@ export class CliSubprocessRunner {
     const combinedPrompt = `${req.systemPrompt}\n\n---\n\n${req.userPrompt}`
     let cmd = backend.executablePath
     let args: string[] = []
-    let env: NodeJS.ProcessEnv = { ...process.env }
+    let env: NodeJS.ProcessEnv = applyCustomEnv({ ...process.env }, backend.customEnv)
+    let promptDeliveredViaArg = false
 
-    if (backend.id === 'agy-cli') {
+    if (backend.customArgs && backend.customArgs.length > 0) {
+      const substituted = backend.customArgs.map((arg) => {
+        if (arg.includes('{{prompt}}')) promptDeliveredViaArg = true
+        return arg
+          .replace(/\{\{model\}\}/g, effectiveModel || '')
+          .replace(/\{\{reasoning\}\}/g, String(mapped.nativeValue))
+          .replace(/\{\{projectRoot\}\}/g, req.projectRoot)
+          .replace(/\{\{prompt\}\}/g, combinedPrompt)
+      })
+      if (/\.(mjs|js|cjs)$/i.test(backend.executablePath)) {
+        const nodeExec = resolveNodeForScript(backend.executablePath, null)
+        cmd = nodeExec.cmd
+        env = applyCustomEnv(env, nodeExec.extraEnv)
+        args = [backend.executablePath, ...substituted]
+      } else if (/\.(cmd|bat)$/i.test(backend.executablePath)) {
+        cmd = 'cmd.exe'
+        args = ['/c', backend.executablePath, ...substituted]
+      } else {
+        args = substituted
+      }
+    } else if (backend.id === 'agy-cli') {
       args = ['-p', '--output-format', 'stream-json']
       if (effectiveModel) args.push('--model', effectiveModel)
       args.push('--effort', String(mapped.nativeValue))
@@ -107,7 +142,9 @@ export class CliSubprocessRunner {
       if (effectiveModel) wbArgs.push('--model', effectiveModel)
       if (req.sessionId) wbArgs.push('--resume', req.sessionId)
       if (/\.(mjs|js|cjs)$/i.test(backend.executablePath)) {
-        cmd = 'node'
+        const nodeExec = resolveNodeForScript(backend.executablePath, null)
+        cmd = nodeExec.cmd
+        env = applyCustomEnv(env, nodeExec.extraEnv)
         args = [backend.executablePath, ...wbArgs]
       } else if (/\.(cmd|bat)$/i.test(backend.executablePath)) {
         cmd = 'cmd.exe'
@@ -230,7 +267,9 @@ export class CliSubprocessRunner {
         resolve({ fullText, thinkingText, sessionId })
       })
 
-      child.stdin.write(combinedPrompt, 'utf8')
+      if (!promptDeliveredViaArg) {
+        child.stdin.write(combinedPrompt, 'utf8')
+      }
       child.stdin.end()
     })
   }

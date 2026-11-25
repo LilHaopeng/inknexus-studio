@@ -29,6 +29,11 @@ import { ProjectManager } from './workspace/project-manager'
 import { ImporterService } from './workspace/importer'
 import { PythonRunner } from './workspace/python-runner'
 import { RadarService } from './workspace/radar-service'
+import {
+  captureInteractiveRadarBrowser,
+  capturePublicChartWithBuiltinBrowser,
+  openInteractiveRadarBrowser
+} from './workspace/radar-browser'
 import { AgentDiscoveryService } from './bridge/discovery'
 import { CliSubprocessRunner } from './bridge/cli-adapters'
 import { AcpBridgeRunner } from './bridge/acp-adapter'
@@ -92,7 +97,7 @@ export class StudioRuntime {
     this.radarService = new RadarService(this.skillLoader, this.store)
     this.skillUpdater = new SkillUpdaterService(this.skillLoader, this.store)
     this.appUpdater = new AppUpdaterService()
-    this.discovery = new AgentDiscoveryService()
+    this.discovery = new AgentDiscoveryService(this.store.rootDir)
     this.cliRunner = new CliSubprocessRunner()
     this.acpRunner = new AcpBridgeRunner()
     this.apiPresets = new ApiPresetService(this.store)
@@ -361,6 +366,10 @@ export class StudioRuntime {
     )
     ipcMain.handle('skills:list', () => this.skillUpdater.listRegistry())
     ipcMain.handle('skills:checkUpdate', (_, skillId: SkillId) => this.skillUpdater.checkSkillUpdate(skillId))
+    ipcMain.handle('skills:checkAllUpdates', async () => {
+      const list = this.skillUpdater.listRegistry()
+      return Promise.all(list.map((s) => this.skillUpdater.checkSkillUpdate(s.id).catch(() => s)))
+    })
     ipcMain.handle('skills:pullUpdate', (_, skillId: SkillId) => this.skillUpdater.pullSkillUpdate(skillId))
 
     // App Self-Updater
@@ -373,6 +382,7 @@ export class StudioRuntime {
 
     // Agents & API Presets
     ipcMain.handle('agents:discover', () => this.refreshLocalAgents())
+    ipcMain.handle('agents:getBridgePaths', () => this.discovery.getBridgePaths())
     ipcMain.handle('agents:testLocal', (_, backend: AgentBackendInfo) => this.discovery.testLocalAgent(backend))
     ipcMain.handle('api:list', () => this.apiPresets.listConfigs())
     ipcMain.handle(
@@ -809,12 +819,28 @@ export class StudioRuntime {
       (_, params: { projectRoot: string; title: string; mode: CreationMode; format: 'docx' | 'txt' | 'both'; preset?: 'book' | 'screen' }) =>
         this.pythonRunner.exportProject(params)
     )
+    ipcMain.handle(
+      'projects:exportAssets',
+      (
+        _,
+        params: {
+          projectRoot: string
+          title: string
+          category: 'world' | 'outline' | 'prose'
+          relPaths: string[]
+          mergeMode: 'merged' | 'separate'
+        }
+      ) => this.pythonRunner.exportSelectedAssets(params)
+    )
 
-    // Market Radar One-Click Scan & Trend Comparison
+    // Market Radar One-Click Scan & Trend Comparison (Built-in Electron Browser + Baseline Fallback)
     ipcMain.handle('radar:list', (_, workspaceRoot?: string) =>
       this.radarService.scanReports(workspaceRoot || this.store.getConfig().workspaceRoot)
     )
     ipcMain.handle('radar:listTrends', () => this.store.listRadarTrends())
+    ipcMain.handle('radar:fetchLive', (_, platform: string) => capturePublicChartWithBuiltinBrowser(platform))
+    ipcMain.handle('radar:openBrowser', (_, platform: string) => openInteractiveRadarBrowser(platform))
+    ipcMain.handle('radar:captureBrowser', () => captureInteractiveRadarBrowser())
     ipcMain.handle(
       'radar:runScan',
       async (
@@ -824,10 +850,22 @@ export class StudioRuntime {
           track: 'short' | 'long' | 'ai-drama' | 'both'
           notes?: string
           selection: AgentSelection
+          useBuiltinBrowser?: boolean
         }
       ) => {
         const workspaceRoot = this.store.getConfig().workspaceRoot
-        const { systemPrompt, userPrompt, targetFolderName } = this.radarService.buildScanPrompt(params)
+        let liveMeta = undefined
+        let liveCapturedText: string | undefined
+        if (params.useBuiltinBrowser !== false && !(params.notes && params.notes.length > 300)) {
+          liveMeta = await capturePublicChartWithBuiltinBrowser(params.platform)
+          if (liveMeta.ok && liveMeta.extractedText) {
+            liveCapturedText = liveMeta.extractedText
+          }
+        }
+        const { systemPrompt, userPrompt, targetFolderName } = this.radarService.buildScanPrompt({
+          ...params,
+          liveCapturedText
+        })
         const res = await this.executeAgentTurn({
           requestId: `radar_${Date.now()}`,
           selection: params.selection,
@@ -838,7 +876,7 @@ export class StudioRuntime {
           onEvent: () => {}
         })
         const created = this.radarService.saveScanResult(workspaceRoot, targetFolderName, res.fullText)
-        return { created, reports: this.radarService.scanReports(workspaceRoot) }
+        return { created, reports: this.radarService.scanReports(workspaceRoot), liveMeta }
       }
     )
     ipcMain.handle(

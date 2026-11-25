@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AgentBackendInfo,
+  AgentBridgePaths,
   AgentSelection,
   AnnotationReply,
   AnnotationThread,
@@ -11,6 +12,7 @@ import type {
   ImportedFileItem,
   PermissionMode,
   ProjectCategory,
+  RadarLiveFetchResult,
   RadarReportSummary,
   RadarTrendAnalysis,
   ReviewHistoryEntry,
@@ -77,6 +79,19 @@ const api = {
     classify: (projectRoot: string, targetCategory: Exclude<ProjectCategory, 'unclassified'>) =>
       ipcRenderer.invoke('projects:classify', projectRoot, targetCategory),
     deleteFolder: (projectRoot: string) => ipcRenderer.invoke('projects:deleteFolder', projectRoot),
+    exportAssets: (params: {
+      projectRoot: string
+      title: string
+      category: 'world' | 'outline' | 'prose'
+      relPaths: string[]
+      mergeMode: 'merged' | 'separate'
+    }) =>
+      ipcRenderer.invoke('projects:exportAssets', params) as Promise<{
+        ok: boolean
+        outputFiles: string[]
+        outputDir: string
+        message: string
+      }>,
     radarReports: (workspaceRoot?: string) =>
       ipcRenderer.invoke('projects:radarReports', workspaceRoot) as Promise<RadarReportSummary[]>,
     onExternalChange: (cb: (payload: { projectRoot: string; relPath: string }) => void) => {
@@ -125,6 +140,7 @@ const api = {
   skills: {
     registry: () => ipcRenderer.invoke('skills:list') as Promise<SkillRegistryItem[]>,
     checkUpdate: (skillId: SkillId) => ipcRenderer.invoke('skills:checkUpdate', skillId) as Promise<SkillRegistryItem>,
+    checkAllUpdates: () => ipcRenderer.invoke('skills:checkAllUpdates') as Promise<SkillRegistryItem[]>,
     pullUpdate: (skillId: SkillId) => ipcRenderer.invoke('skills:pullUpdate', skillId) as Promise<SkillRegistryItem>
   },
   updater: {
@@ -141,6 +157,7 @@ const api = {
   },
   agents: {
     discover: () => ipcRenderer.invoke('agents:discover') as Promise<AgentBackendInfo[]>,
+    getBridgePaths: () => ipcRenderer.invoke('agents:getBridgePaths') as Promise<AgentBridgePaths>,
     testLocal: (backend: AgentBackendInfo) =>
       ipcRenderer.invoke('agents:testLocal', backend) as Promise<{ ok: boolean; message: string }>,
     listApis: () => ipcRenderer.invoke('api:list'),
@@ -226,15 +243,20 @@ const api = {
   radar: {
     list: (workspaceRoot?: string) => ipcRenderer.invoke('radar:list', workspaceRoot) as Promise<RadarReportSummary[]>,
     listTrends: () => ipcRenderer.invoke('radar:listTrends') as Promise<RadarTrendAnalysis[]>,
+    fetchLive: (platform: string) => ipcRenderer.invoke('radar:fetchLive', platform) as Promise<RadarLiveFetchResult>,
+    openBrowser: (platform: string) => ipcRenderer.invoke('radar:openBrowser', platform) as Promise<{ url: string }>,
+    captureBrowser: () => ipcRenderer.invoke('radar:captureBrowser') as Promise<RadarLiveFetchResult>,
     runScan: (params: {
       platform: string
       track: 'short' | 'long' | 'ai-drama' | 'both'
       notes?: string
       selection: AgentSelection
+      useBuiltinBrowser?: boolean
     }) =>
       ipcRenderer.invoke('radar:runScan', params) as Promise<{
         created: RadarReportSummary
         reports: RadarReportSummary[]
+        liveMeta?: RadarLiveFetchResult
       }>,
     compareTrends: (params: { folderNames: string[]; selection: AgentSelection }) =>
       ipcRenderer.invoke('radar:compareTrends', params) as Promise<RadarTrendAnalysis[]>

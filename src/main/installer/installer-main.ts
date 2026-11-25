@@ -169,7 +169,7 @@ function killRunningInstanceInDir(installDir: string): Promise<void> {
 
 export async function performInstall(opts: PerformInstallOptions): Promise<{ installDir: string; installedExe: string }> {
   const emit = opts.onProgress ?? (() => {})
-  const version = opts.appVersion || '1.0.1'
+  const version = opts.appVersion || '1.0.2'
   const cleanInstallDir = path.resolve(opts.installDir)
 
   emit({ step: 'prepare', percent: 4, label: '正在准备安装环境与检查目标目录...' })
@@ -275,16 +275,36 @@ export async function performInstall(opts: PerformInstallOptions): Promise<{ ins
       await runRegCommand(['delete', REG_RUN_KEY, '/v', 'InkNexusStudio', '/f'])
     }
 
+    // Ensure external-agent bridge guide sits directly in installation root and Contents workspace exists
+    const readmeSrc = path.join(opts.payloadDir, 'resources', 'AGENT_BRIDGE_README.md')
+    const readmeDest = path.join(cleanInstallDir, 'AGENT_BRIDGE_README.md')
+    if (fs.existsSync(readmeSrc) && !fs.existsSync(readmeDest)) {
+      try {
+        fs.copyFileSync(readmeSrc, readmeDest)
+      } catch {
+        // ignore non-fatal doc copy issue
+      }
+    }
+    const contentsRoot = path.join(cleanInstallDir, 'Contents')
+    for (const sub of ['长文小说', '短篇网文', 'AI剧本', '未分类', '扫榜']) {
+      try {
+        fs.mkdirSync(path.join(contentsRoot, sub), { recursive: true })
+      } catch {
+        // ignore if read-only target
+      }
+    }
+
+    // Safe uninstaller: NEVER removes Contents directory holding user novels/scripts!
     const uninstallScript = [
       '@echo off',
       'chcp 65001 >nul',
-      'echo 正在卸载 墨枢 InkNexus Studio（不会删除您的小说原稿目录与作品文件）...',
+      'echo 正在卸载 墨枢 InkNexus Studio（已安全保留 Contents 目录中的全部小说与作品文件）...',
       `taskkill /IM "${APP_EXE_NAME}" /F >nul 2>nul`,
       `if exist "${desktopLnk}" del /f /q "${desktopLnk}"`,
       `if exist "${startMenuDir}" rmdir /s /q "${startMenuDir}"`,
       `reg delete "${REG_RUN_KEY}" /v InkNexusStudio /f >nul 2>nul`,
       `reg delete "${REG_UNINSTALL_KEY}" /f >nul 2>nul`,
-      `start "" cmd /c "timeout /t 2 /nobreak >nul & rmdir /s /q ""${cleanInstallDir}"""`,
+      `start "" cmd /c "timeout /t 2 /nobreak >nul & if exist ""${cleanInstallDir}\\resources"" rmdir /s /q ""${cleanInstallDir}\\resources"" & if exist ""${cleanInstallDir}\\locales"" rmdir /s /q ""${cleanInstallDir}\\locales"" & if exist ""${cleanInstallDir}\\swiftshader"" rmdir /s /q ""${cleanInstallDir}\\swiftshader"" & del /f /q ""${cleanInstallDir}\\*.exe"" ""${cleanInstallDir}\\*.dll"" ""${cleanInstallDir}\\*.pak"" ""${cleanInstallDir}\\*.dat"" ""${cleanInstallDir}\\*.bin"" ""${cleanInstallDir}\\*.json"" ""${cleanInstallDir}\\*.html"" ""${cleanInstallDir}\\*.md"" ""${cleanInstallDir}\\uninstall.cmd"" >nul 2>nul & rmdir ""${cleanInstallDir}"" >nul 2>nul"`,
       'exit /b 0'
     ].join('\r\n')
     fs.writeFileSync(uninstallCmdPath, uninstallScript, 'utf8')
@@ -320,6 +340,25 @@ export async function performInstall(opts: PerformInstallOptions): Promise<{ ins
     await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'EstimatedSize', '/t', 'REG_DWORD', '/d', String(estimatedKb), '/f'])
     await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'NoModify', '/t', 'REG_DWORD', '/d', '1', '/f'])
     await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'NoRepair', '/t', 'REG_DWORD', '/d', '1', '/f'])
+  } else {
+    // Also prepare bridge README + Contents workspace in skipSystemRegistration mode for installer E2E checks
+    const readmeSrc = path.join(opts.payloadDir, 'resources', 'AGENT_BRIDGE_README.md')
+    const readmeDest = path.join(cleanInstallDir, 'AGENT_BRIDGE_README.md')
+    if (fs.existsSync(readmeSrc) && !fs.existsSync(readmeDest)) {
+      try {
+        fs.copyFileSync(readmeSrc, readmeDest)
+      } catch {
+        // ignore
+      }
+    }
+    const contentsRoot = path.join(cleanInstallDir, 'Contents')
+    for (const sub of ['长文小说', '短篇网文', 'AI剧本', '未分类', '扫榜']) {
+      try {
+        fs.mkdirSync(path.join(contentsRoot, sub), { recursive: true })
+      } catch {
+        // ignore
+      }
+    }
   }
 
   emit({ step: 'done', percent: 100, label: '安装完成！' })
@@ -350,7 +389,7 @@ export async function runInstallerMode(): Promise<void> {
         createStartMenuShortcut: !skipSystemRegistration,
         launchOnStartup: false,
         skipSystemRegistration,
-        appVersion: app.getVersion() || '1.0.1'
+        appVersion: app.getVersion() || '1.0.2'
       })
       app.exit(0)
     } catch (err) {
@@ -383,7 +422,7 @@ export async function runInstallerMode(): Promise<void> {
   })
 
   ipcMain.handle('installer:getDefaults', () => ({
-    version: app.getVersion() || '1.0.1',
+    version: app.getVersion() || '1.0.2',
     installDir: defaultDir,
     requiredBytes,
     freeBytes: getDiskFreeBytes(defaultDir),

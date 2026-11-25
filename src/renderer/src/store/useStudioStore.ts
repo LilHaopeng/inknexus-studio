@@ -9,6 +9,7 @@ import type {
   ApiProviderConfig,
   AppConfig,
   AppDataStorageReport,
+  AppUpdateInfo,
   AssetNode,
   ChatMessage,
   ContextSlice,
@@ -56,6 +57,7 @@ interface StudioState {
   reviewMode: ReviewMode
   reviewModeConfirmed: boolean
   agentSelection: AgentSelection
+  agentsDiscovered: boolean
   roleAgentOverrides: Record<string, Partial<Record<AgentRoleId, AgentSelection>>>
   agentCommsByProject: Record<string, AgentCommsMessage[]>
   activeWorks: Record<string, ActiveWorkEntry>
@@ -64,6 +66,9 @@ interface StudioState {
   lintReport: LintReport | null
   reviewHistory: ReviewHistoryEntry[]
   skillRegistry: SkillRegistryItem[]
+  startupAppUpdate: import('@shared/types').AppUpdateInfo | null
+  startupUpdatableSkills: SkillRegistryItem[]
+  updateBannerDismissed: boolean
   appInfo: { version: string; author: string; repoUrl: string; authorUrl: string }
   swarmJobs: SwarmJob[]
   storageReport: AppDataStorageReport | null
@@ -91,6 +96,7 @@ interface StudioState {
   setStreamingState: (patch: Partial<Pick<StudioState, 'isGenerating' | 'activeRequestId' | 'streamingText' | 'streamingThinking' | 'statusText'>>) => void
   setReviewMode: (mode: ReviewMode, confirmed?: boolean) => void
   setAgentSelection: (sel: AgentSelection) => void
+  setAgentsDiscovered: (discovered: boolean) => void
   setRoleAgentOverride: (projectRoot: string, role: AgentRoleId, sel: AgentSelection) => void
   ensureRoleAgentSnapshot: (projectRoot: string, role: AgentRoleId) => AgentSelection
   appendAgentComm: (msg: Omit<AgentCommsMessage, 'id' | 'timestamp'>) => void
@@ -100,6 +106,8 @@ interface StudioState {
   setLintReport: (report: LintReport | null) => void
   setReviewHistory: (list: ReviewHistoryEntry[]) => void
   setSkillRegistry: (list: SkillRegistryItem[]) => void
+  setStartupUpdateInfo: (appUpdate: AppUpdateInfo | null, skills?: SkillRegistryItem[]) => void
+  dismissUpdateBanner: () => void
   setAppInfo: (info: { version: string; author: string; repoUrl: string; authorUrl?: string }) => void
   setSwarmJobs: (jobs: SwarmJob[]) => void
   setStorageReport: (report: AppDataStorageReport | null) => void
@@ -129,10 +137,11 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   reviewMode: 'single',
   reviewModeConfirmed: false,
   agentSelection: {
-    backendId: 'agy-cli',
-    model: 'gemini-4-neon',
+    backendId: '',
+    model: '',
     reasoning: 'high'
   },
+  agentsDiscovered: false,
   roleAgentOverrides: {},
   agentCommsByProject: {},
   activeWorks: {},
@@ -141,8 +150,11 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   lintReport: null,
   reviewHistory: [],
   skillRegistry: [],
+  startupAppUpdate: null,
+  startupUpdatableSkills: [],
+  updateBannerDismissed: false,
   appInfo: {
-    version: '1.0.1',
+    version: '1.0.2',
     author: '@LilHaopeng',
     repoUrl: 'https://github.com/LilHaopeng/inknexus-studio',
     authorUrl: 'https://github.com/LilHaopeng'
@@ -211,6 +223,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       reviewModeConfirmed: confirmed !== undefined ? confirmed : s.reviewModeConfirmed
     })),
   setAgentSelection: (agentSelection) => set({ agentSelection }),
+  setAgentsDiscovered: (agentsDiscovered) => set({ agentsDiscovered }),
   setRoleAgentOverride: (projectRoot, role, sel) =>
     set((s) => {
       const key = projectRoot.toLowerCase()
@@ -273,6 +286,12 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   setLintReport: (lintReport) => set({ lintReport }),
   setReviewHistory: (reviewHistory) => set({ reviewHistory }),
   setSkillRegistry: (skillRegistry) => set({ skillRegistry }),
+  setStartupUpdateInfo: (startupAppUpdate, skills) =>
+    set((s) => ({
+      startupAppUpdate,
+      startupUpdatableSkills: skills ?? s.startupUpdatableSkills
+    })),
+  dismissUpdateBanner: () => set({ updateBannerDismissed: true }),
   setAppInfo: (info) =>
     set({
       appInfo: {

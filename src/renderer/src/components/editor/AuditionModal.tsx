@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Check, Play, SplitSquareHorizontal, X } from 'lucide-react'
 import type { AgentSelection, StreamChunkEvent } from '@shared/types'
 import { stripAgentMarkupForDisplay } from '@shared/agent-markup-filter'
@@ -69,9 +70,9 @@ export const AuditionModal: React.FC<AuditionModalProps> = ({ open, onClose, onA
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
-      <div className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">
+  return createPortal(
+    <div onClick={onClose} className="no-drag fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+      <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">
         <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
           <div className="flex items-center gap-2">
             <SplitSquareHorizontal className="h-4 w-4 text-accent" />
@@ -148,6 +149,7 @@ export const AuditionModal: React.FC<AuditionModalProps> = ({ open, onClose, onA
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
