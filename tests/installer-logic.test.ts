@@ -19,7 +19,7 @@ vi.mock('electron', () => ({
   }
 }))
 
-import { computePayloadStats, getArgValue, getDiskFreeBytes } from '../src/main/installer/installer-main'
+import { computePayloadStats, getArgValue, getDiskFreeBytes, performInstall } from '../src/main/installer/installer-main'
 import { formatUserAgreementPlainText, USER_AGREEMENT_SECTIONS } from '../src/shared/user-agreement'
 
 describe('Custom Aurora installer helpers & user agreement', () => {
@@ -51,5 +51,34 @@ describe('Custom Aurora installer helpers & user agreement', () => {
     expect(text).toContain('MIT')
     expect(text).toContain('所有权')
     expect(text).toContain('不收集')
+  })
+
+  it('copies payload including resources/app.asar cleanly when skipSystemRegistration is enabled', async () => {
+    const payloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'inknexus-payload-'))
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'inknexus-dest-'))
+    try {
+      fs.mkdirSync(path.join(payloadDir, 'resources'), { recursive: true })
+      const asarContent = Buffer.from('ASAR_BINARY_HEADER_PAYLOAD_TEST_BYTES_123456')
+      fs.writeFileSync(path.join(payloadDir, '墨枢 InkNexus Studio.exe'), 'exe-bytes', 'utf8')
+      fs.writeFileSync(path.join(payloadDir, 'resources', 'app.asar'), asarContent)
+
+      const res = await performInstall({
+        payloadDir,
+        installDir,
+        createDesktopShortcut: false,
+        createStartMenuShortcut: false,
+        launchOnStartup: false,
+        skipSystemRegistration: true,
+        appVersion: '1.0.1'
+      })
+
+      expect(res.installDir).toBe(path.resolve(installDir))
+      expect(fs.existsSync(path.join(installDir, 'resources', 'app.asar'))).toBe(true)
+      expect(fs.readFileSync(path.join(installDir, 'resources', 'app.asar')).equals(asarContent)).toBe(true)
+      expect(fs.existsSync(path.join(installDir, 'uninstall.cmd'))).toBe(false)
+    } finally {
+      fs.rmSync(payloadDir, { recursive: true, force: true })
+      fs.rmSync(installDir, { recursive: true, force: true })
+    }
   })
 })

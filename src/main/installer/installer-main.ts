@@ -1,8 +1,29 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { execFile } from 'child_process'
-import fs from 'fs'
+import nodeFs from 'fs'
+import { createRequire } from 'module'
 import os from 'os'
 import path from 'path'
+
+function getRawFs(): typeof nodeFs {
+  const modName = 'original-fs'
+  try {
+    // In packaged Electron main process, 'original-fs' bypasses ASAR virtual-fs interception so .asar files copy as normal binary files
+    if (typeof require === 'function') {
+      return require(modName) as typeof nodeFs
+    }
+  } catch {
+    // fall through
+  }
+  try {
+    const base = typeof __filename === 'string' ? __filename : import.meta.url
+    return createRequire(base)(modName) as typeof nodeFs
+  } catch {
+    return nodeFs
+  }
+}
+
+const fs = getRawFs()
 
 export interface InstallFileEntry {
   src: string
@@ -22,6 +43,7 @@ export interface PerformInstallOptions {
   createDesktopShortcut: boolean
   createStartMenuShortcut: boolean
   launchOnStartup: boolean
+  skipSystemRegistration?: boolean
   appVersion?: string
   onProgress?: (ev: InstallProgressEvent) => void
 }
@@ -84,7 +106,7 @@ export function computePayloadStats(payloadDir: string): { files: InstallFileEnt
   let totalBytes = 0
 
   const walk = (dir: string) => {
-    let entries: fs.Dirent[] = []
+    let entries: nodeFs.Dirent[] = []
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true })
     } catch {
@@ -139,13 +161,15 @@ function killRunningInstanceInDir(installDir: string): Promise<void> {
       return
     }
     const ps = `Get-Process | Where-Object { $_.Path -eq '${targetExe.replace(/'/g, "''")}' } | Stop-Process -Force -ErrorAction SilentlyContinue`
-    execFile('powershell.exe', ['-NoProfile', '-Command', ps], { windowsHide: true, timeout: 6000 }, () => resolve())
+    execFile('powershell.exe', ['-NoProfile', '-Command', ps], { windowsHide: true, timeout: 6000 }, () => {
+      setTimeout(resolve, 350)
+    })
   })
 }
 
 export async function performInstall(opts: PerformInstallOptions): Promise<{ installDir: string; installedExe: string }> {
   const emit = opts.onProgress ?? (() => {})
-  const version = opts.appVersion || '1.0.0'
+  const version = opts.appVersion || '1.0.1'
   const cleanInstallDir = path.resolve(opts.installDir)
 
   emit({ step: 'prepare', percent: 4, label: '正在准备安装环境与检查目标目录...' })
@@ -166,6 +190,13 @@ export async function performInstall(opts: PerformInstallOptions): Promise<{ ins
     const dest = path.join(cleanInstallDir, f.rel)
     fs.mkdirSync(path.dirname(dest), { recursive: true })
     if (path.resolve(f.src).toLowerCase() !== path.resolve(dest).toLowerCase()) {
+      if (fs.existsSync(dest)) {
+        try {
+          fs.chmodSync(dest, 0o666)
+        } catch {
+          // ignore permission reset error before overwrite attempt
+        }
+      }
       fs.copyFileSync(f.src, dest)
     }
     copiedBytes += f.size
@@ -182,111 +213,114 @@ export async function performInstall(opts: PerformInstallOptions): Promise<{ ins
     }
   }
 
-  emit({ step: 'configure', percent: 88, label: '正在创建快捷方式与注册应用组件...' })
   const installedExe = path.join(cleanInstallDir, APP_EXE_NAME)
-  const uninstallCmdPath = path.join(cleanInstallDir, 'uninstall.cmd')
-  const desktopLnk = path.join(os.homedir(), 'Desktop', '墨枢 InkNexus Studio.lnk')
-  const startMenuDir = path.join(
-    process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
-    'Microsoft',
-    'Windows',
-    'Start Menu',
-    'Programs',
-    '墨枢 InkNexus Studio'
-  )
 
-  const iconLocation = fs.existsSync(path.join(cleanInstallDir, 'resources', 'icon.ico'))
-    ? path.join(cleanInstallDir, 'resources', 'icon.ico')
-    : installedExe
+  if (!opts.skipSystemRegistration) {
+    emit({ step: 'configure', percent: 88, label: '正在创建快捷方式与注册应用组件...' })
+    const uninstallCmdPath = path.join(cleanInstallDir, 'uninstall.cmd')
+    const desktopLnk = path.join(os.homedir(), 'Desktop', '墨枢 InkNexus Studio.lnk')
+    const startMenuDir = path.join(
+      process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
+      'Microsoft',
+      'Windows',
+      'Start Menu',
+      'Programs',
+      '墨枢 InkNexus Studio'
+    )
 
-  if (opts.createDesktopShortcut) {
-    try {
-      shell.writeShortcutLink(desktopLnk, 'create', {
-        target: installedExe,
-        cwd: cleanInstallDir,
-        icon: iconLocation,
-        iconIndex: 0,
-        description: '墨枢 InkNexus Studio — AI 赋能的小说创作工作台'
-      })
-    } catch {
-      // non-fatal shortcut failure
+    const iconLocation = fs.existsSync(path.join(cleanInstallDir, 'resources', 'icon.ico'))
+      ? path.join(cleanInstallDir, 'resources', 'icon.ico')
+      : installedExe
+
+    if (opts.createDesktopShortcut) {
+      try {
+        shell.writeShortcutLink(desktopLnk, 'create', {
+          target: installedExe,
+          cwd: cleanInstallDir,
+          icon: iconLocation,
+          iconIndex: 0,
+          description: '墨枢 InkNexus Studio — AI 赋能的小说创作工作台'
+        })
+      } catch {
+        // non-fatal shortcut failure
+      }
     }
-  }
 
-  if (opts.createStartMenuShortcut) {
-    try {
-      fs.mkdirSync(startMenuDir, { recursive: true })
-      shell.writeShortcutLink(path.join(startMenuDir, '墨枢 InkNexus Studio.lnk'), 'create', {
-        target: installedExe,
-        cwd: cleanInstallDir,
-        icon: iconLocation,
-        iconIndex: 0,
-        description: '墨枢 InkNexus Studio — AI 赋能的小说创作工作台'
-      })
-      shell.writeShortcutLink(path.join(startMenuDir, '卸载 墨枢 InkNexus Studio.lnk'), 'create', {
-        target: 'cmd.exe',
-        args: `/c "${uninstallCmdPath}"`,
-        cwd: cleanInstallDir,
-        icon: iconLocation,
-        iconIndex: 0,
-        description: '卸载 墨枢 InkNexus Studio'
-      })
-    } catch {
-      // non-fatal
+    if (opts.createStartMenuShortcut) {
+      try {
+        fs.mkdirSync(startMenuDir, { recursive: true })
+        shell.writeShortcutLink(path.join(startMenuDir, '墨枢 InkNexus Studio.lnk'), 'create', {
+          target: installedExe,
+          cwd: cleanInstallDir,
+          icon: iconLocation,
+          iconIndex: 0,
+          description: '墨枢 InkNexus Studio — AI 赋能的小说创作工作台'
+        })
+        shell.writeShortcutLink(path.join(startMenuDir, '卸载 墨枢 InkNexus Studio.lnk'), 'create', {
+          target: 'cmd.exe',
+          args: `/c "${uninstallCmdPath}"`,
+          cwd: cleanInstallDir,
+          icon: iconLocation,
+          iconIndex: 0,
+          description: '卸载 墨枢 InkNexus Studio'
+        })
+      } catch {
+        // non-fatal
+      }
     }
+
+    if (opts.launchOnStartup) {
+      await runRegCommand(['add', REG_RUN_KEY, '/v', 'InkNexusStudio', '/t', 'REG_SZ', '/d', `"${installedExe}"`, '/f'])
+    } else {
+      await runRegCommand(['delete', REG_RUN_KEY, '/v', 'InkNexusStudio', '/f'])
+    }
+
+    const uninstallScript = [
+      '@echo off',
+      'chcp 65001 >nul',
+      'echo 正在卸载 墨枢 InkNexus Studio（不会删除您的小说原稿目录与作品文件）...',
+      `taskkill /IM "${APP_EXE_NAME}" /F >nul 2>nul`,
+      `if exist "${desktopLnk}" del /f /q "${desktopLnk}"`,
+      `if exist "${startMenuDir}" rmdir /s /q "${startMenuDir}"`,
+      `reg delete "${REG_RUN_KEY}" /v InkNexusStudio /f >nul 2>nul`,
+      `reg delete "${REG_UNINSTALL_KEY}" /f >nul 2>nul`,
+      `start "" cmd /c "timeout /t 2 /nobreak >nul & rmdir /s /q ""${cleanInstallDir}"""`,
+      'exit /b 0'
+    ].join('\r\n')
+    fs.writeFileSync(uninstallCmdPath, uninstallScript, 'utf8')
+
+    const estimatedKb = Math.max(1024, Math.round(totalBytes / 1024))
+    await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'DisplayName', '/t', 'REG_SZ', '/d', '墨枢 InkNexus Studio', '/f'])
+    await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'DisplayVersion', '/t', 'REG_SZ', '/d', version, '/f'])
+    await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'Publisher', '/t', 'REG_SZ', '/d', 'LilHaopeng', '/f'])
+    await runRegCommand([
+      'add',
+      REG_UNINSTALL_KEY,
+      '/v',
+      'URLInfoAbout',
+      '/t',
+      'REG_SZ',
+      '/d',
+      'https://github.com/LilHaopeng/inknexus-studio',
+      '/f'
+    ])
+    await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'InstallLocation', '/t', 'REG_SZ', '/d', cleanInstallDir, '/f'])
+    await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'DisplayIcon', '/t', 'REG_SZ', '/d', iconLocation, '/f'])
+    await runRegCommand([
+      'add',
+      REG_UNINSTALL_KEY,
+      '/v',
+      'UninstallString',
+      '/t',
+      'REG_SZ',
+      '/d',
+      `cmd.exe /c "${uninstallCmdPath}"`,
+      '/f'
+    ])
+    await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'EstimatedSize', '/t', 'REG_DWORD', '/d', String(estimatedKb), '/f'])
+    await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'NoModify', '/t', 'REG_DWORD', '/d', '1', '/f'])
+    await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'NoRepair', '/t', 'REG_DWORD', '/d', '1', '/f'])
   }
-
-  if (opts.launchOnStartup) {
-    await runRegCommand(['add', REG_RUN_KEY, '/v', 'InkNexusStudio', '/t', 'REG_SZ', '/d', `"${installedExe}"`, '/f'])
-  } else {
-    await runRegCommand(['delete', REG_RUN_KEY, '/v', 'InkNexusStudio', '/f'])
-  }
-
-  const uninstallScript = [
-    '@echo off',
-    'chcp 65001 >nul',
-    'echo 正在卸载 墨枢 InkNexus Studio（不会删除您的小说原稿目录与作品文件）...',
-    `taskkill /IM "${APP_EXE_NAME}" /F >nul 2>nul`,
-    `if exist "${desktopLnk}" del /f /q "${desktopLnk}"`,
-    `if exist "${startMenuDir}" rmdir /s /q "${startMenuDir}"`,
-    `reg delete "${REG_RUN_KEY}" /v InkNexusStudio /f >nul 2>nul`,
-    `reg delete "${REG_UNINSTALL_KEY}" /f >nul 2>nul`,
-    `start "" cmd /c "timeout /t 2 /nobreak >nul & rmdir /s /q ""${cleanInstallDir}"""`,
-    'exit /b 0'
-  ].join('\r\n')
-  fs.writeFileSync(uninstallCmdPath, uninstallScript, 'utf8')
-
-  const estimatedKb = Math.max(1024, Math.round(totalBytes / 1024))
-  await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'DisplayName', '/t', 'REG_SZ', '/d', '墨枢 InkNexus Studio', '/f'])
-  await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'DisplayVersion', '/t', 'REG_SZ', '/d', version, '/f'])
-  await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'Publisher', '/t', 'REG_SZ', '/d', 'LilHaopeng', '/f'])
-  await runRegCommand([
-    'add',
-    REG_UNINSTALL_KEY,
-    '/v',
-    'URLInfoAbout',
-    '/t',
-    'REG_SZ',
-    '/d',
-    'https://github.com/LilHaopeng/inknexus-studio',
-    '/f'
-  ])
-  await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'InstallLocation', '/t', 'REG_SZ', '/d', cleanInstallDir, '/f'])
-  await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'DisplayIcon', '/t', 'REG_SZ', '/d', iconLocation, '/f'])
-  await runRegCommand([
-    'add',
-    REG_UNINSTALL_KEY,
-    '/v',
-    'UninstallString',
-    '/t',
-    'REG_SZ',
-    '/d',
-    `cmd.exe /c "${uninstallCmdPath}"`,
-    '/f'
-  ])
-  await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'EstimatedSize', '/t', 'REG_DWORD', '/d', String(estimatedKb), '/f'])
-  await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'NoModify', '/t', 'REG_DWORD', '/d', '1', '/f'])
-  await runRegCommand(['add', REG_UNINSTALL_KEY, '/v', 'NoRepair', '/t', 'REG_DWORD', '/d', '1', '/f'])
 
   emit({ step: 'done', percent: 100, label: '安装完成！' })
   return { installDir: cleanInstallDir, installedExe }
@@ -296,6 +330,7 @@ export async function runInstallerMode(): Promise<void> {
   const argv = process.argv
   const payloadDir = resolvePayloadDir(argv)
   const silent = argv.includes('--silent')
+  const skipSystemRegistration = argv.includes('--skip-system-registration')
   const explicitDir = getArgValue(argv, '--install-dir')
   const defaultDir = explicitDir || (await getDefaultInstallDir())
 
@@ -311,13 +346,15 @@ export async function runInstallerMode(): Promise<void> {
       await performInstall({
         payloadDir,
         installDir: defaultDir,
-        createDesktopShortcut: true,
-        createStartMenuShortcut: true,
+        createDesktopShortcut: !skipSystemRegistration,
+        createStartMenuShortcut: !skipSystemRegistration,
         launchOnStartup: false,
-        appVersion: app.getVersion() || '1.0.0'
+        skipSystemRegistration,
+        appVersion: app.getVersion() || '1.0.1'
       })
       app.exit(0)
-    } catch {
+    } catch (err) {
+      process.stderr.write(`Silent install failed: ${err instanceof Error ? err.stack || err.message : String(err)}\n`)
       app.exit(1)
     }
     return
@@ -346,7 +383,7 @@ export async function runInstallerMode(): Promise<void> {
   })
 
   ipcMain.handle('installer:getDefaults', () => ({
-    version: app.getVersion() || '1.0.0',
+    version: app.getVersion() || '1.0.1',
     installDir: defaultDir,
     requiredBytes,
     freeBytes: getDiskFreeBytes(defaultDir),
@@ -394,7 +431,7 @@ export async function runInstallerMode(): Promise<void> {
           createDesktopShortcut: opts.createDesktopShortcut,
           createStartMenuShortcut: opts.createStartMenuShortcut,
           launchOnStartup: opts.launchOnStartup,
-          appVersion: app.getVersion() || '1.0.0',
+          appVersion: app.getVersion() || '1.0.1',
           onProgress: (ev) => {
             if (!win.isDestroyed()) {
               win.webContents.send('installer:progress', ev)
