@@ -2,6 +2,7 @@ import { app, BrowserWindow, Menu, nativeImage, shell, Tray } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import { StudioRuntime } from './ipc'
+import { runInstallerMode } from './installer/installer-main'
 
 let mainWindow: BrowserWindow | null = null
 let runtime: StudioRuntime | null = null
@@ -10,6 +11,8 @@ let isQuitting = false
 
 function resolveIconPath(): string {
   const candidates = [
+    path.join(process.resourcesPath || '', 'icon.ico'),
+    path.join(process.resourcesPath || '', 'icon.png'),
     path.join(process.resourcesPath || '', '..', 'build', 'icon.ico'),
     path.resolve(process.cwd(), 'build', 'icon.png'),
     path.resolve(process.cwd(), 'build', 'icon.ico')
@@ -103,7 +106,11 @@ function createMainWindow(): BrowserWindow {
   return win
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  if (process.argv.includes('--installer-mode')) {
+    await runInstallerMode()
+    return
+  }
   runtime = new StudioRuntime(
     () => mainWindow,
     (action, remember) => {
@@ -136,23 +143,20 @@ app.whenReady().then(() => {
         const img = await mainWindow.webContents.capturePage()
         fs.writeFileSync(path.join(outDir, `${name}.png`), img.toPNG())
       }
-      await wait(1200)
-      await snap('v2_01_home_light')
+      await wait(3200)
+      await snap('v3_01_home_light')
       await mainWindow?.webContents.executeJavaScript(`window.__inknexusSmoke?.('home-dark')`)
       await wait(700)
-      await snap('v2_02_home_dark')
+      await snap('v3_02_home_dark')
       await mainWindow?.webContents.executeJavaScript(`window.__inknexusSmoke?.('workbench-light')`)
       await wait(900)
-      await snap('v2_03_workbench_light')
-      await mainWindow?.webContents.executeJavaScript(`window.__inknexusSmoke?.('workbench-dark')`)
+      await snap('v3_03_workbench_light')
+      await mainWindow?.webContents.executeJavaScript(`window.__inknexusSmoke?.('fullbook-modal')`)
+      await wait(700)
+      await snap('v3_04_fullbook_modal')
+      await mainWindow?.webContents.executeJavaScript(`window.__inknexusSmoke?.('settings-agents')`)
       await wait(900)
-      await snap('v2_04_workbench_dark')
-      await mainWindow?.webContents.executeJavaScript(`window.__inknexusSmoke?.('radar')`)
-      await wait(700)
-      await snap('v2_05_radar')
-      await mainWindow?.webContents.executeJavaScript(`window.__inknexusSmoke?.('settings-skills')`)
-      await wait(700)
-      await snap('v2_06_settings_skills_update')
+      await snap('v3_05_settings_agents')
       isQuitting = true
       app.quit()
     })

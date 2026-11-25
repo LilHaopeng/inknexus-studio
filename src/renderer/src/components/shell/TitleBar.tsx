@@ -15,7 +15,6 @@ import {
   X
 } from 'lucide-react'
 import { toast } from 'sonner'
-import avatarMascot from '../../assets/brand/avatar-mascot.png'
 import { useStudioStore } from '../../store/useStudioStore'
 import { AgentSelectorBar } from '../ui/AgentSelectorBar'
 
@@ -292,13 +291,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenExport, onOpenVersions
         >
           {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
         </button>
-
-        <img
-          src={avatarMascot}
-          alt="墨枢品牌头像"
-          title="墨枢 InkNexus Studio"
-          className="h-7 w-7 rounded-full border border-border object-cover shadow-xs"
-        />
 
         <div className="ml-1 flex items-center gap-1 border-l border-border pl-2">
           <button

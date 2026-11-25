@@ -19,11 +19,12 @@ import {
   Workflow
 } from 'lucide-react'
 import { toast } from 'sonner'
-import type { AnnotationThread, PermissionMode, ReviewHistoryEntry } from '@shared/types'
+import type { AnnotationThread, PermissionMode, ReviewHistoryEntry, ReviewMode } from '@shared/types'
 import { stripAgentMarkupForDisplay } from '@shared/agent-markup-filter'
 import { useStudioStore } from '../../store/useStudioStore'
 import { AgentSelectorBar } from '../ui/AgentSelectorBar'
 import { ReviewModeSelector } from '../ui/ReviewModeSelector'
+import { FullBookReviewModal } from '../ui/FullBookReviewModal'
 
 interface AgentChatPanelProps {
   draftPrompt: string
@@ -35,7 +36,7 @@ interface AgentChatPanelProps {
   onDispatchAllAnnotations: () => Promise<void>
   onRunLint: () => Promise<void>
   onRunChapterReview: () => Promise<void>
-  onRunFullBookReview: () => Promise<void>
+  onRunFullBookReview: (chosenMode: ReviewMode) => Promise<void>
 }
 
 export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
@@ -77,6 +78,7 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
   const [replyTargetId, setReplyTargetId] = useState<string | null>(null)
   const [replyText, setReplyText] = useState('')
   const [reviewBusy, setReviewBusy] = useState(false)
+  const [fullBookModalOpen, setFullBookModalOpen] = useState(false)
 
   const totalTokens = contextSlices.filter((s) => s.enabled).reduce((acc, s) => acc + s.tokens, 0)
   const fileAnnotations = annotations.filter((a) => !activeTabRelPath || a.filePath === activeTabRelPath)
@@ -123,10 +125,12 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
     }
   }
 
-  const triggerFullBookReview = async () => {
+  const triggerFullBookReview = async (chosenMode: ReviewMode) => {
+    setFullBookModalOpen(false)
+    setReviewMode(chosenMode)
     setReviewBusy(true)
     try {
-      await onRunFullBookReview()
+      await onRunFullBookReview(chosenMode)
       setRightTab('lint')
     } finally {
       setReviewBusy(false)
@@ -583,7 +587,7 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
               <button
                 type="button"
                 disabled={reviewBusy}
-                onClick={() => void triggerFullBookReview()}
+                onClick={() => setFullBookModalOpen(true)}
                 className="inline-flex items-center justify-center gap-1 rounded-xl bg-gradient-to-r from-[#7855DA] to-[#684BD2] px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm disabled:opacity-45"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${reviewBusy ? 'animate-spin' : ''}`} />
@@ -679,6 +683,14 @@ export const AgentChatPanel: React.FC<AgentChatPanelProps> = ({
           </div>
         </div>
       )}
+
+      <FullBookReviewModal
+        open={fullBookModalOpen}
+        initialMode={reviewMode}
+        busy={reviewBusy}
+        onCancel={() => setFullBookModalOpen(false)}
+        onConfirm={triggerFullBookReview}
+      />
     </aside>
   )
 }

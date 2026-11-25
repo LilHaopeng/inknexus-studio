@@ -1,21 +1,20 @@
 import React from 'react'
-import { Brain, Cpu, Layers } from 'lucide-react'
+import { Cpu, Layers } from 'lucide-react'
 import type { AgentSelection, ReasoningLevel } from '@shared/types'
+import {
+  REASONING_ORDER,
+  clampReasoningLevel,
+  groupModelsByFamily,
+  parseModelEffortVariant
+} from '@shared/model-families'
 import { useStudioStore } from '../../store/useStudioStore'
+import { ReasoningSlider } from './ReasoningSlider'
 
 interface AgentSelectorBarProps {
   value: AgentSelection
   onChange: (next: AgentSelection) => void
   compact?: boolean
 }
-
-const REASONING_OPTIONS: Array<{ id: ReasoningLevel; label: string }> = [
-  { id: 'off', label: '关闭思考' },
-  { id: 'low', label: '轻度思考' },
-  { id: 'medium', label: '标准思考' },
-  { id: 'high', label: '深度思考' },
-  { id: 'max', label: '极限推理' }
-]
 
 export const AgentSelectorBar: React.FC<AgentSelectorBarProps> = ({ value, onChange, compact = false }) => {
   const { localAgents, apiConfigs } = useStudioStore()
@@ -24,20 +23,55 @@ export const AgentSelectorBar: React.FC<AgentSelectorBarProps> = ({ value, onCha
   const availableLocals = localAgents.filter((a) => a.status === 'available')
   const unavailableLocals = localAgents.filter((a) => a.status !== 'available')
 
-  const allBackends = [
-    ...availableLocals.map((a) => ({ id: a.id, label: a.name, models: a.models, tag: '本地' })),
-    ...enabledApis.map((a) => ({ id: a.presetId, label: a.name, models: a.models, tag: 'API' })),
-    ...unavailableLocals.map((a) => ({ id: a.id, label: `${a.name} (未安装)`, models: a.models, tag: '未装' })),
+  const allBackends: Array<{
+    id: string
+    label: string
+    models: string[]
+    supportedReasoning: ReasoningLevel[]
+    tag: string
+  }> = [
+    ...availableLocals.map((a) => ({
+      id: a.id,
+      label: a.name,
+      models: a.models,
+      supportedReasoning: a.supportedReasoning,
+      tag: '本地'
+    })),
+    ...enabledApis.map((a) => ({
+      id: a.presetId,
+      label: a.name,
+      models: a.models,
+      supportedReasoning: REASONING_ORDER,
+      tag: 'API'
+    })),
+    ...unavailableLocals.map((a) => ({
+      id: a.id,
+      label: `${a.name} (未安装)`,
+      models: a.models,
+      supportedReasoning: a.supportedReasoning,
+      tag: '未装'
+    })),
     ...apiConfigs
       .filter((a) => !a.enabled && !a.hasApiKey)
-      .map((a) => ({ id: a.presetId, label: `${a.name} (未填Key)`, models: a.models, tag: '未配' }))
+      .map((a) => ({
+        id: a.presetId,
+        label: `${a.name} (未填Key)`,
+        models: a.models,
+        supportedReasoning: REASONING_ORDER,
+        tag: '未配'
+      }))
   ]
 
   const currentBackend = allBackends.find((b) => b.id === value.backendId) ?? allBackends[0]
-  const models = currentBackend?.models?.length ? currentBackend.models : [value.model || 'default']
+  const rawModels = currentBackend?.models?.length ? currentBackend.models : [value.model || 'default']
+  const families = groupModelsByFamily(rawModels, currentBackend?.supportedReasoning ?? REASONING_ORDER)
+  const selectedBaseId = parseModelEffortVariant(value.model || '').baseId
+  const activeFamily = families.find((f) => f.baseId === selectedBaseId) ?? families[0]
+  const supportedLevels = activeFamily?.supportedLevels ?? REASONING_ORDER
+  const effectiveReasoning = clampReasoningLevel(value.reasoning, supportedLevels)
 
   return (
-    <div className={`grid gap-1.5 ${compact ? 'grid-cols-3' : 'grid-cols-1 sm:grid-cols-3'}`}>
+    <div className={`grid gap-1.5 ${compact ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1 sm:grid-cols-3'}`}>
       <label className="flex items-center gap-1.5 rounded-lg border border-border bg-surface-raised px-2 py-1.5 text-xs">
         <Cpu className="h-3.5 w-3.5 shrink-0 text-accent" />
         <select
@@ -46,10 +80,20 @@ export const AgentSelectorBar: React.FC<AgentSelectorBarProps> = ({ value, onCha
           onChange={(e) => {
             const nextId = e.target.value
             const nextB = allBackends.find((b) => b.id === nextId)
+            const nextFamilies = groupModelsByFamily(
+              nextB?.models?.length ? nextB.models : [value.model],
+              nextB?.supportedReasoning ?? REASONING_ORDER
+            )
+            const firstFam = nextFamilies[0]
+            const nextModel = firstFam?.baseId ?? value.model
+            const nextReasoning = clampReasoningLevel(
+              value.reasoning,
+              firstFam?.supportedLevels ?? nextB?.supportedReasoning ?? REASONING_ORDER
+            )
             onChange({
-              ...value,
               backendId: nextId,
-              model: nextB?.models?.[0] ?? value.model
+              model: nextModel,
+              reasoning: nextReasoning
             })
           }}
           className="w-full min-w-0 bg-transparent text-text-primary outline-none"
@@ -66,33 +110,42 @@ export const AgentSelectorBar: React.FC<AgentSelectorBarProps> = ({ value, onCha
         <Layers className="h-3.5 w-3.5 shrink-0 text-accent" />
         <select
           aria-label="选择模型"
-          value={models.includes(value.model) ? value.model : models[0]}
-          onChange={(e) => onChange({ ...value, model: e.target.value })}
+          value={activeFamily?.baseId ?? ''}
+          onChange={(e) => {
+            const nextBase = e.target.value
+            const nextFam = families.find((f) => f.baseId === nextBase)
+            const nextReasoning = clampReasoningLevel(
+              value.reasoning,
+              nextFam?.supportedLevels ?? REASONING_ORDER
+            )
+            onChange({
+              ...value,
+              model: nextBase,
+              reasoning: nextReasoning
+            })
+          }}
           className="w-full min-w-0 bg-transparent text-text-primary outline-none"
         >
-          {models.map((m) => (
-            <option key={m} value={m} className="bg-surface-raised text-text-primary">
-              {m}
+          {families.map((fam) => (
+            <option key={fam.baseId} value={fam.baseId} className="bg-surface-raised text-text-primary">
+              {fam.baseId}
             </option>
           ))}
         </select>
       </label>
 
-      <label className="flex items-center gap-1.5 rounded-lg border border-border bg-surface-raised px-2 py-1.5 text-xs">
-        <Brain className="h-3.5 w-3.5 shrink-0 text-accent" />
-        <select
-          aria-label="思考深度"
-          value={value.reasoning}
-          onChange={(e) => onChange({ ...value, reasoning: e.target.value as ReasoningLevel })}
-          className="w-full min-w-0 bg-transparent text-text-primary outline-none"
-        >
-          {REASONING_OPTIONS.map((r) => (
-            <option key={r.id} value={r.id} className="bg-surface-raised text-text-primary">
-              {r.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <ReasoningSlider
+        value={effectiveReasoning}
+        supportedLevels={supportedLevels}
+        compact={compact}
+        onChange={(nextReasoning) =>
+          onChange({
+            ...value,
+            model: activeFamily?.baseId ?? value.model,
+            reasoning: nextReasoning
+          })
+        }
+      />
     </div>
   )
 }

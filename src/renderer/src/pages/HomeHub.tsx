@@ -15,6 +15,7 @@ import type { CreationMode, ImportedFileItem, PreComposedPrompt, SubTemplateId }
 import { useStudioStore } from '../store/useStudioStore'
 import heroMascot from '../assets/brand/hero-mascot.png'
 import { ImportWizardModal } from '../components/ui/ImportWizardModal'
+import { AgentSelectorBar } from '../components/ui/AgentSelectorBar'
 
 interface HomeHubProps {
   onLaunchProject: (params: {
@@ -69,7 +70,7 @@ const MODE_CARDS: Array<{
 ]
 
 export const HomeHub: React.FC<HomeHubProps> = ({ onLaunchProject }) => {
-  const { projects, setPage } = useStudioStore()
+  const { projects, setPage, agentSelection, setAgentSelection } = useStudioStore()
   const [ideaText, setIdeaText] = useState('')
   const [workflowPref, setWorkflowPref] = useState<'auto' | CreationMode>('auto')
   const [showModePicker, setShowModePicker] = useState(false)
@@ -213,7 +214,7 @@ export const HomeHub: React.FC<HomeHubProps> = ({ onLaunchProject }) => {
             </div>
 
             <div className="flex items-center gap-3">
-              <span className="text-xs text-text-muted">{ideaText.length} / 4000</span>
+              <span className="text-xs text-text-muted">{ideaText.length > 0 ? `${ideaText.length} 字` : '不限字数'}</span>
               <button
                 type="button"
                 onClick={handleStartCreationClick}
@@ -223,6 +224,13 @@ export const HomeHub: React.FC<HomeHubProps> = ({ onLaunchProject }) => {
                 <span>开始创作</span>
                 <ArrowRight className="h-4 w-4" />
               </button>
+            </div>
+          </div>
+
+          <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-2.5">
+            <span className="text-[11px] font-medium text-text-muted">执行引擎 / 模型 / 思考强度（左右拖动）：</span>
+            <div className="min-w-[380px] flex-1 max-w-2xl">
+              <AgentSelectorBar value={agentSelection} onChange={setAgentSelection} compact />
             </div>
           </div>
 

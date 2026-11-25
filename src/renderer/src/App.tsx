@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Toaster, toast } from 'sonner'
 import type { PreComposedPrompt, ProjectSummary, SwarmJob } from '@shared/types'
+import { parseModelEffortVariant } from '@shared/model-families'
 import { useStudioStore } from './store/useStudioStore'
 import { AuroraBackdrop } from './components/ui/AuroraBrand'
 import { TitleBar } from './components/shell/TitleBar'
@@ -120,7 +121,7 @@ export const App: React.FC = () => {
         const cfg = useStudioStore.getState().config
         useStudioStore.getState().setAgentSelection({
           backendId: first.id,
-          model: first.models[0] || '',
+          model: parseModelEffortVariant(first.models[0] || '').baseId,
           reasoning: cfg?.defaultReasoning ?? 'high'
         })
       }
@@ -200,6 +201,16 @@ export const App: React.FC = () => {
           store.setPage('workbench')
         }
         store.setReviewMode('advanced')
+      } else if (scene === 'fullbook-modal') {
+        store.setPage('workbench')
+        setTimeout(() => {
+          const btns = Array.from(document.querySelectorAll('button'))
+          btns.find((b) => b.textContent?.trim().startsWith('审校'))?.click()
+          setTimeout(() => {
+            const btns2 = Array.from(document.querySelectorAll('button'))
+            btns2.find((b) => b.textContent?.includes('再次运行全文审查'))?.click()
+          }, 120)
+        }, 120)
       } else if (scene === 'swarm') {
         const updated = await window.inknexus.config.save({ theme: 'aurora-light' })
         store.setConfig(updated)
@@ -208,8 +219,16 @@ export const App: React.FC = () => {
         const updated = await window.inknexus.config.save({ theme: 'aurora-light' })
         store.setConfig(updated)
         store.setPage('radar')
-      } else if (scene === 'settings-skills' || scene === 'settings-storage') {
-        setSettingsTab(scene === 'settings-skills' ? 'skills' : 'storage')
+      } else if (scene === 'settings-skills' || scene === 'settings-storage' || scene === 'settings-agents') {
+        const updated = await window.inknexus.config.save({ theme: 'aurora-light' })
+        store.setConfig(updated)
+        if (scene === 'settings-agents' && store.localAgents.length === 0) {
+          const list = await window.inknexus.agents.discover()
+          store.setLocalAgents(list)
+        }
+        setSettingsTab(
+          scene === 'settings-skills' ? 'skills' : scene === 'settings-agents' ? 'agents' : 'storage'
+        )
         store.setPage('settings')
       }
     }

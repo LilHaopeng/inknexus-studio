@@ -1,5 +1,6 @@
 import { spawn } from 'child_process'
 import type { AgentBackendInfo } from '@shared/types'
+import { resolveExecutableModelId } from '@shared/model-families'
 import { mapReasoningLevel } from './reasoning-map'
 import type { AgentExecutionRequest, AgentExecutionResult } from './types'
 
@@ -20,7 +21,8 @@ export class CliSubprocessRunner {
       throw new Error(`未找到本地 Agent：${backend.name}`)
     }
 
-    const mapped = mapReasoningLevel(backend.id, req.selection.reasoning, req.selection.model)
+    const effectiveModel = resolveExecutableModelId(backend.models, req.selection.model, req.selection.reasoning)
+    const mapped = mapReasoningLevel(backend.id, req.selection.reasoning, effectiveModel)
     if (mapped.mappedNote) {
       req.onEvent({ requestId: req.requestId, type: 'status', status: mapped.mappedNote })
     }
@@ -32,7 +34,7 @@ export class CliSubprocessRunner {
 
     if (backend.id === 'agy-cli') {
       args = ['-p', '--output-format', 'stream-json']
-      if (req.selection.model) args.push('--model', req.selection.model)
+      if (effectiveModel) args.push('--model', effectiveModel)
       args.push('--effort', String(mapped.nativeValue))
       if (req.permissionMode === 'auto-write') {
         args.push('--mode', 'accept-edits')
@@ -51,7 +53,7 @@ export class CliSubprocessRunner {
         '-C',
         req.projectRoot
       ]
-      if (req.selection.model) innerArgs.push('-m', req.selection.model)
+      if (effectiveModel) innerArgs.push('-m', effectiveModel)
       innerArgs.push('-c', `model_reasoning_effort=${String(mapped.nativeValue)}`)
       innerArgs.push('-s', req.permissionMode === 'auto-write' ? 'workspace-write' : 'read-only')
       innerArgs.push('-')
@@ -66,8 +68,53 @@ export class CliSubprocessRunner {
     } else if (backend.id === 'claude-cli') {
       cmd = 'cmd.exe'
       args = ['/c', backend.executablePath, '-p', '--output-format', 'stream-json']
-      if (req.selection.model) args.push('--model', req.selection.model)
+      if (effectiveModel) args.push('--model', effectiveModel)
       if (req.sessionId) args.push('--resume', req.sessionId)
+    } else if (backend.id === 'qoder-cn-cli' || backend.id === 'qoder-cli') {
+      const isCmd = /\.(cmd|bat)$/i.test(backend.executablePath)
+      const qArgs = ['-p', '--output-format', 'stream-json']
+      if (effectiveModel) qArgs.push('-m', effectiveModel)
+      if (req.selection.reasoning === 'off') {
+        qArgs.push('--thinking', 'disabled')
+      } else {
+        qArgs.push('--thinking', 'enabled', '--reasoning-effort', String(mapped.nativeValue))
+      }
+      qArgs.push('--permission-mode', req.permissionMode === 'auto-write' ? 'accept_edits' : 'default')
+      if (req.sessionId) qArgs.push('-r', req.sessionId)
+      if (isCmd) {
+        cmd = 'cmd.exe'
+        args = ['/c', backend.executablePath, ...qArgs]
+      } else {
+        args = qArgs
+      }
+    } else if (backend.id === 'workbuddy-cn-cli' || backend.id === 'workbuddy-intl-cli') {
+      env = sanitizeProxyEnvForDsh(env)
+      if (backend.id === 'workbuddy-cn-cli') {
+        env.CODEBUDDY_INTERNET_ENVIRONMENT = 'internal'
+      } else {
+        delete env.CODEBUDDY_INTERNET_ENVIRONMENT
+      }
+      const wbArgs = [
+        '-p',
+        '--output-format',
+        'stream-json',
+        '--include-partial-messages',
+        '--effort',
+        String(mapped.nativeValue),
+        '--permission-mode',
+        req.permissionMode === 'auto-write' ? 'acceptEdits' : 'plan'
+      ]
+      if (effectiveModel) wbArgs.push('--model', effectiveModel)
+      if (req.sessionId) wbArgs.push('--resume', req.sessionId)
+      if (/\.(mjs|js|cjs)$/i.test(backend.executablePath)) {
+        cmd = 'node'
+        args = [backend.executablePath, ...wbArgs]
+      } else if (/\.(cmd|bat)$/i.test(backend.executablePath)) {
+        cmd = 'cmd.exe'
+        args = ['/c', backend.executablePath, ...wbArgs]
+      } else {
+        args = wbArgs
+      }
     } else {
       const isCmd = /\.(cmd|bat)$/i.test(backend.executablePath)
       if (isCmd) {

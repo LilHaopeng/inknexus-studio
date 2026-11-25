@@ -10,7 +10,7 @@ import {
   Settings,
   Workflow
 } from 'lucide-react'
-import appLogo from '../../assets/brand/app-logo.png'
+import navLogo from '../../assets/brand/nav-logo.png'
 import { useStudioStore, type NavPage } from '../../store/useStudioStore'
 
 interface NavItem {
@@ -49,8 +49,8 @@ export const GlobalNav: React.FC = () => {
           onClick={() => setPage('home')}
           className="flex items-center gap-2.5 text-left"
         >
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-accent/25 bg-[#f7f4ff] p-1 shadow-xs">
-            <img src={appLogo} alt="墨枢 Logo" className="h-full w-full object-contain" />
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-accent/25 bg-[#f7f4ff] shadow-xs">
+            <img src={navLogo} alt="墨枢 Logo" className="h-full w-full object-cover" />
           </span>
           {!compact && (
             <div className="leading-tight">
@@ -150,7 +150,6 @@ export const GlobalNav: React.FC = () => {
           <div className="rounded-xl border border-border/70 bg-surface-raised/65 px-2.5 py-2 text-[11px]">
             <div className="flex items-center justify-between text-text-secondary">
               <span className="font-semibold text-text-primary">InkNexus {appInfo.version}</span>
-              <span className="rounded bg-accent-soft px-1.5 py-0.5 text-[10px] font-medium text-accent">MIT</span>
             </div>
             <button
               type="button"

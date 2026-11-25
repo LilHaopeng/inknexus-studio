@@ -13,7 +13,7 @@ import {
   Users
 } from 'lucide-react'
 import { toast } from 'sonner'
-import type { AnnotationThread, AssetNode, ChatMessage, DiffProposal, StreamChunkEvent } from '@shared/types'
+import type { AnnotationThread, AssetNode, ChatMessage, DiffProposal, ReviewMode, StreamChunkEvent } from '@shared/types'
 import { useStudioStore } from '../store/useStudioStore'
 import { OfficeEditor } from '../components/editor/OfficeEditor'
 import { AgentChatPanel } from '../components/chat/AgentChatPanel'
@@ -337,10 +337,11 @@ export const Workbench: React.FC<WorkbenchProps> = ({
     }
   }
 
-  const handleRunFullBookReview = async () => {
+  const handleRunFullBookReview = async (chosenMode?: ReviewMode) => {
     if (!activeProject) return
-    const mode = useStudioStore.getState().reviewMode
-    toast.info(`正在执行「全文审查」《${activeProject.title}》...`)
+    const mode = chosenMode ?? useStudioStore.getState().reviewMode
+    const modeLabel = mode === 'self' ? '自审' : mode === 'single' ? '单独审查' : '高级审查'
+    toast.info(`正在执行「全文审查」（${modeLabel}）《${activeProject.title}》...`)
     try {
       const history = await window.inknexus.reviews.runFullBook({
         projectRoot: activeProject.rootPath,

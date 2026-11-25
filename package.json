@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "package:win": "electron-vite build && electron-builder --win --dir",
-    "package:win:exe": "electron-vite build && electron-builder --win"
+    "package:win:exe": "electron-vite build && electron-builder --win --dir && electron-builder --win portable && node scripts/build-custom-installer.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.16.1",

@@ -275,9 +275,9 @@ export const SettingsPage: React.FC<{ initialTab?: SettingsTab }> = ({ initialTa
                   </button>
                 </div>
 
-                <div className="space-y-2.5">
+                <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
                   {localAgents.map((ag) => (
-                    <div key={ag.id} className="glass-card flex flex-wrap items-center justify-between gap-3 p-4">
+                    <div key={ag.id} className="glass-card flex flex-wrap items-center justify-between gap-2 p-3">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-semibold text-text-primary">{ag.name}</span>

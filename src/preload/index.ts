@@ -257,6 +257,52 @@ const api = {
   }
 }
 
+const installerApi = {
+  getDefaults: () =>
+    ipcRenderer.invoke('installer:getDefaults') as Promise<{
+      version: string
+      installDir: string
+      requiredBytes: number
+      freeBytes: number
+      author: string
+      repoUrl: string
+    }>,
+  pickDir: () =>
+    ipcRenderer.invoke('installer:pickDir') as Promise<{ installDir: string; freeBytes: number } | null>,
+  checkSpace: (targetDir: string) =>
+    ipcRenderer.invoke('installer:checkSpace', targetDir) as Promise<{ freeBytes: number; requiredBytes: number }>,
+  start: (opts: {
+    installDir: string
+    createDesktopShortcut: boolean
+    createStartMenuShortcut: boolean
+    launchOnStartup: boolean
+  }) =>
+    ipcRenderer.invoke('installer:start', opts) as Promise<{
+      ok: boolean
+      installDir?: string
+      installedExe?: string
+      error?: string
+    }>,
+  onProgress: (
+    cb: (ev: { step: 'prepare' | 'copy' | 'configure' | 'done' | 'error'; percent: number; label: string }) => void
+  ) => {
+    const listener = (
+      _: unknown,
+      ev: { step: 'prepare' | 'copy' | 'configure' | 'done' | 'error'; percent: number; label: string }
+    ) => cb(ev)
+    ipcRenderer.on('installer:progress', listener)
+    return () => {
+      ipcRenderer.removeListener('installer:progress', listener)
+    }
+  },
+  launchApp: (installDir: string) => ipcRenderer.invoke('installer:launchApp', installDir),
+  minimize: () => ipcRenderer.invoke('installer:minimize'),
+  close: () => ipcRenderer.invoke('installer:close'),
+  openExternal: (url: string) => ipcRenderer.invoke('installer:openExternal', url)
+}
+
 contextBridge.exposeInMainWorld('inknexus', api)
+contextBridge.exposeInMainWorld('inknexusInstaller', installerApi)
 
 export type InkNexusApi = typeof api
+export type InkNexusInstallerApi = typeof installerApi

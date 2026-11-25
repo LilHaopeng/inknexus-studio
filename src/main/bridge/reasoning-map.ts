@@ -8,6 +8,7 @@ export interface MappedReasoning {
 export function mapReasoningLevel(backendId: string, level: ReasoningLevel, model?: string): MappedReasoning {
   if (backendId.startsWith('agy')) {
     if (level === 'off') return { nativeValue: 'low', mappedNote: 'AGY 最低支持 low 档，已自动映射为 low' }
+    if (level === 'max') return { nativeValue: 'xhigh', mappedNote: 'AGY 极限推理自动映射为 xhigh' }
     return { nativeValue: level }
   }
 
@@ -31,6 +32,31 @@ export function mapReasoningLevel(backendId: string, level: ReasoningLevel, mode
       nativeValue: level,
       mappedNote: level === 'off' ? 'DSH 默认按基础推理执行' : undefined
     }
+  }
+
+  if (backendId.startsWith('qoder')) {
+    const table: Record<ReasoningLevel, string> = {
+      off: 'disabled',
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      max: 'high'
+    }
+    return {
+      nativeValue: table[level],
+      mappedNote: level === 'max' ? 'Qoder 最高思考映射为 high' : undefined
+    }
+  }
+
+  if (backendId.startsWith('workbuddy')) {
+    const table: Record<ReasoningLevel, string> = {
+      off: 'minimal',
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      max: 'max'
+    }
+    return { nativeValue: table[level] }
   }
 
   if (backendId.includes('doubao') || backendId.includes('volc')) {
